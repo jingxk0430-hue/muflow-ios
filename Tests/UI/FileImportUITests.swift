@@ -2,6 +2,33 @@ import XCTest
 
 final class FileImportUITests: XCTestCase {
     @MainActor
+    func testWebDAVLoginAndFolderNavigation() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launch()
+        app.buttons["openWebDAV"].tap()
+        let address = app.textFields["webdavAddress"]
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap(); address.typeText("http://127.0.0.1:18765/dav/")
+        let username = app.textFields["webdavUsername"]
+        username.tap(); username.typeText("fixture-user")
+        let password = app.secureTextFields["webdavPassword"]
+        password.tap(); password.typeText("fixture-password")
+        app.buttons["connectWebDAV"].tap()
+        let folder = app.buttons["webdav-item-Series"]
+        XCTAssertTrue(folder.waitForExistence(timeout: 20), app.debugDescription)
+        folder.tap()
+        XCTAssertTrue(app.buttons["webdav-item-Episode 01.mkv"].waitForExistence(timeout: 15), app.debugDescription)
+        app.buttons["webdavParent"].tap()
+        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        app.buttons["closeWebDAV"].tap()
+        app.buttons["openLocalVideo"].tap()
+        XCTAssertTrue(app.buttons["Cancel"].firstMatch.waitForExistence(timeout: 10))
+        app.buttons["Cancel"].firstMatch.tap()
+    }
+
+    @MainActor
     func testLocalVideoPickerCanOpenAgainAfterCancellationAndOtherImports() {
         continueAfterFailure = false
         let app = XCUIApplication()

@@ -21,6 +21,8 @@ jobs:
         run: brew install xcodegen
       - name: Test danmaku parsing and timeline behavior
         run: swift test --package-path Packages/DanmakuCore
+      - name: Test WebDAV paths, authentication and directory parsing
+        run: swift test --package-path Packages/WebDAVCore
       - name: Validate project and credential exclusions
         run: python3 scripts/validate_project.py
       - name: Test local video picker in an iPhone simulator

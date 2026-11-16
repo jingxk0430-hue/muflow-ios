@@ -9,6 +9,7 @@
 ## 首期功能
 
 - 从“文件”打开本地视频、音频和网络媒体直链。
+- WebDAV：账号登录、目录浏览、返回上级及媒体在线播放；登录信息可保存在此设备钥匙串。
 - 播放、暂停、进度跳转、倍速、音轨选择、字幕选择与外挂字幕导入。
 - 搜索弹弹play兼容弹幕服务、选择作品和剧集、从来源链接加载弹幕。
 - 导入 Bilibili XML、弹弹play JSON 和 `c/m` JSON 弹幕，导出 XML。
@@ -33,6 +34,8 @@
 python3 scripts/validate_project.py
 # macOS / Xcode 环境下执行实际单元测试与编译
 swift test --package-path Packages/DanmakuCore
+swift test --package-path Packages/WebDAVCore
+bash scripts/test_ui.sh
 bash scripts/build_ios.sh
 ```
 
@@ -71,6 +74,8 @@ python3 scripts/install_local.py \
 ## 隐私
 
 视频和弹幕文件保存在手机。搜索关键词、选定剧集编号、用户主动添加的来源链接会发送给配置的弹幕服务。应用不包含遥测、登录账号、推送通知或自动客户业务操作。
+
+WebDAV 登录信息仅用于用户配置的服务器，不发送给弹幕服务。目录请求拒绝跳转到其他服务器；播放使用单个媒体 URL 的 HTTP 认证，不设置全局认证头。保存的登录信息使用设备钥匙串，应用中可清除。首版面向标准 HTTP Basic 认证；服务器需有可由系统信任的证书，未实现自签名证书例外、OAuth、SMB 或 NFS。
 
 ## 许可
 

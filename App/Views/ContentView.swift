@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var showingURL = false
     @State private var showingSearch = false
     @State private var showingSettings = false
+    @State private var showingWebDAV = false
     @State private var exporting = false
     @State private var fullscreen = false
     @State private var controlsVisible = true
@@ -42,6 +43,7 @@ struct ContentView: View {
             .sheet(isPresented: $showingURL) { urlSheet }
             .sheet(isPresented: $showingSearch) { DanmakuSearchView(model: model) }
             .sheet(isPresented: $showingSettings) { SettingsView(model: model) }
+            .sheet(isPresented: $showingWebDAV) { WebDAVView(model: model) }
             // One presentation host for every import. Stacking fileImporter modifiers
             // on the same view can leave the earlier import buttons without a dialog.
             .fileImporter(isPresented: $importingFile, allowedContentTypes: importKind.contentTypes,
@@ -101,8 +103,9 @@ struct ContentView: View {
             if let error = model.player.lastError {
                 VStack(spacing: 12) {
                     Text("视频未能播放").font(.headline)
-                    Text(error.message).font(.caption).lineLimit(3)
-                    Button("重试") { if let url = model.mediaURL { model.open(url) } }
+                    Text(model.usesWebDAVCredentials ? "请检查服务器连接与媒体读取权限，再尝试重试。" : error.message)
+                        .font(.caption).lineLimit(3)
+                    Button("重试") { model.retryPlayback() }
                 }.padding().background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
@@ -165,6 +168,9 @@ struct ContentView: View {
                     Button { showingURL = true } label: { Label("网络链接", systemImage: "link") }
                         .accessibilityIdentifier("openNetworkVideo")
                 }.buttonStyle(.borderedProminent).controlSize(.large)
+                Button { showingWebDAV = true } label: {
+                    Label("WebDAV 文件服务器", systemImage: "externaldrive.connected.to.line.below")
+                }.buttonStyle(.bordered).controlSize(.large).accessibilityIdentifier("openWebDAV")
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
                         Label("弹幕", systemImage: "text.bubble.fill").font(.headline)

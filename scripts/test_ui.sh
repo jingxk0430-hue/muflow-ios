@@ -2,6 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 xcodegen generate --spec project.yml
+python3 scripts/webdav_fixture.py &
+fixture_pid=$!
+trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
 simulator_id=$(python3 - <<'PY'
 import json
 import subprocess

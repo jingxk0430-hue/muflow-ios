@@ -25,6 +25,8 @@ final class PlayerModel {
     var sourceTitle = "尚未加载弹幕"
     @ObservationIgnored private var mediaID = UUID()
     @ObservationIgnored private var scopedURL: URL?
+    @ObservationIgnored private var playbackURL: URL?
+    var usesWebDAVCredentials = false
     @ObservationIgnored private var commentsTask: Task<Void, Never>?
     private var cacheURL: URL? {
         guard let mediaURL else { return nil }
@@ -53,11 +55,13 @@ final class PlayerModel {
         fallback = UserDefaults.standard.string(forKey: "danmaku.fallback") ?? "https://dmku.hls.one"
     }
 
-    func open(_ url: URL) {
+    func open(_ url: URL, playbackURL: URL? = nil) {
         commentsTask?.cancel(); isLoadingComments = false
         if let previous = scopedURL { previous.stopAccessingSecurityScopedResource(); scopedURL = nil }
         if url.isFileURL, url.startAccessingSecurityScopedResource() { scopedURL = url }
         mediaID = UUID(); mediaURL = url; error = nil
+        self.playbackURL = playbackURL
+        usesWebDAVCredentials = playbackURL?.user != nil
         comments = []; commentRevision = UUID(); sourceTitle = "尚未加载弹幕"
         title = url.lastPathComponent.isEmpty ? "网络视频" : url.lastPathComponent
         settings.delay = 0
@@ -65,12 +69,16 @@ final class PlayerModel {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
             try AVAudioSession.sharedInstance().setActive(true)
         } catch { self.error = "无法启用声音，请检查音频输出后重试。"; return }
-        player.load(url)
+        player.load(playbackURL ?? url)
         status = "正在打开视频；可搜索弹幕或导入文件"
         if let cacheURL, let data = try? Data(contentsOf: cacheURL),
            let cached = try? DanmakuParser.parse(data), !cached.isEmpty {
             comments = cached; sourceTitle = "已恢复此视频保存的弹幕"; commentRevision = UUID()
         }
+    }
+
+    func retryPlayback() {
+        if let mediaURL { open(mediaURL, playbackURL: playbackURL) }
     }
 
     func openNetwork(_ value: String) {
