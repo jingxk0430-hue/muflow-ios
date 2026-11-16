@@ -52,16 +52,17 @@ final class PlayerModel {
     }
 
     init() {
-        settings = UserDefaults.standard.data(forKey: "danmaku.settings")
+        var storedSettings = UserDefaults.standard.data(forKey: "danmaku.settings")
             .flatMap { try? JSONDecoder().decode(DanmakuSettings.self, from: $0) } ?? .init()
         if UserDefaults.standard.integer(forKey: "danmaku.appearanceVersion") < 2 {
-            settings = settings.migratingLegacyAppearance()
+            storedSettings = storedSettings.migratingLegacyAppearance()
             // Initializer assignments do not call didSet; persist before marking migrated.
-            if let data = try? JSONEncoder().encode(settings) {
+            if let data = try? JSONEncoder().encode(storedSettings) {
                 UserDefaults.standard.set(data, forKey: "danmaku.settings")
                 UserDefaults.standard.set(2, forKey: "danmaku.appearanceVersion")
             }
         }
+        settings = storedSettings
         server = UserDefaults.standard.string(forKey: "danmaku.server") ?? "https://danmaku-api.152468.xyz"
         alternateServer = UserDefaults.standard.string(forKey: "danmaku.alternateServer") ?? "https://danmaku-us.152468.xyz"
         fallback = UserDefaults.standard.string(forKey: "danmaku.fallback") ?? "https://dmku.hls.one"
