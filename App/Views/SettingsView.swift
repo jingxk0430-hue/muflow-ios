@@ -15,6 +15,7 @@ struct SettingsView: View {
                         Image(uiImage: DanmakuTextRenderer.image("弹幕清晰，画面也好看 Aa 123",
                                                                fontSize: model.settings.fontSize,
                                                                outline: model.settings.outline, scale: displayScale))
+                            .interpolation(.none)
                             .opacity(model.settings.opacity)
                     }
                     .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)

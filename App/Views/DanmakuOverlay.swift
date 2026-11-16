@@ -24,11 +24,14 @@ struct DanmakuOverlay: View {
                     let elapsed = model.player.state.isPlaying ? max(0, CACurrentMediaTime() - anchorHost) : 0
                     let time = anchorPosition + elapsed * model.player.playbackRate - model.settings.delay
                     for item in timeline.active(at: time) {
-                        let point = CGPoint(x: item.x(at: time), y: item.y)
+                        // Keep cached glyph pixels on physical pixels while scrolling.
+                        // Fractional image placement otherwise softens the glyph edge each frame.
+                        let point = CGPoint(x: (item.x(at: time) * displayScale).rounded() / displayScale,
+                                            y: (item.y * displayScale).rounded() / displayScale)
                         let image = DanmakuTextRenderer.image(item.comment.text, color: item.comment.color,
                                                              fontSize: model.settings.fontSize,
                                                              outline: model.settings.outline, scale: displayScale)
-                        context.draw(Image(uiImage: image), at: point, anchor: .topLeading)
+                        context.draw(Image(uiImage: image).interpolation(.none), at: point, anchor: .topLeading)
                     }
                 }
                 .opacity(model.settings.opacity)

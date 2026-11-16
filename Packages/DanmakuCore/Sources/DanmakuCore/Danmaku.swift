@@ -136,7 +136,7 @@ private final class XMLDanmakuDelegate: NSObject, XMLParserDelegate {
 }
 
 public struct DanmakuSettings: Codable, Equatable, Sendable {
-    public var opacity = 0.84
+    public var opacity = 1.0
     public var displayArea = 0.5
     public var fontSize = 20.0
     public var scrollDuration = 15.0
@@ -153,6 +153,7 @@ public struct DanmakuSettings: Codable, Equatable, Sendable {
     public func migratingLegacyAppearance() -> Self {
         var result = self
         let defaults = Self()
+        if result.opacity == 0.84 { result.opacity = defaults.opacity }
         if result.fontSize == 24 { result.fontSize = defaults.fontSize }
         if result.outline == 2 { result.outline = defaults.outline }
         if result.displayArea == 0.62 { result.displayArea = defaults.displayArea }

@@ -4,19 +4,21 @@ import XCTest
 final class DanmakuTests: XCTestCase {
     func testAppearanceUpgradePreservesCustomSettingsAndVideoSync() throws {
         var legacy = DanmakuSettings()
+        legacy.opacity = 0.84
         legacy.fontSize = 24; legacy.outline = 2
         legacy.displayArea = 0.62; legacy.maximumOnScreen = 58
         legacy.delay = 3.5; legacy.enabled = false
         let saved = try JSONEncoder().encode(legacy)
         let upgraded = try JSONDecoder().decode(DanmakuSettings.self, from: saved).migratingLegacyAppearance()
         XCTAssertEqual(upgraded.fontSize, 20)
+        XCTAssertEqual(upgraded.opacity, 1)
         XCTAssertEqual(upgraded.outline, 0.65)
         XCTAssertEqual(upgraded.displayArea, 0.5)
         XCTAssertEqual(upgraded.maximumOnScreen, 30)
         XCTAssertEqual(upgraded.delay, 3.5)
         XCTAssertFalse(upgraded.enabled)
 
-        legacy.fontSize = 18; legacy.outline = 0
+        legacy.fontSize = 18; legacy.outline = 0; legacy.opacity = 0.7
         legacy.displayArea = 0.3; legacy.maximumOnScreen = 12
         XCTAssertEqual(legacy.migratingLegacyAppearance(), legacy)
         XCTAssertEqual(upgraded.migratingLegacyAppearance(), upgraded)
