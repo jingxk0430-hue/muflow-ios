@@ -1,0 +1,41 @@
+name: Export unsigned preview
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Build iOS IPA run ID
+        required: true
+      source_commit:
+        description: Exact source commit used by that build
+        required: true
+      tag:
+        description: New prerelease tag
+        required: true
+permissions:
+  contents: write
+  actions: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.run_id }}
+          name: MuFlow-unsigned
+          path: artifact
+      - name: Publish the unsigned preview with exact source reference
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PREVIEW_TAG: ${{ inputs.tag }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          test -f artifact/MuFlow-unsigned.ipa
+          sha256sum artifact/MuFlow-unsigned.ipa > artifact/SHA256SUMS
+          gh release create "$PREVIEW_TAG" --target "$SOURCE_COMMIT" --prerelease \
+            --title 'MuFlow iOS unsigned preview' \
+            --notes 'Unsigned iOS 26 preview. Sign locally with your own valid certificate and registered-device profile. No signing credentials are included. Playback and danmaku require real-device verification.' \
+            artifact/MuFlow-unsigned.ipa artifact/SHA256SUMS
