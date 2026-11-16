@@ -14,6 +14,12 @@ final class FileImportUITests: XCTestCase {
         for (orientation, name) in [(UIDeviceOrientation.portrait, "danmaku-style-portrait"),
                                     (.landscapeLeft, "danmaku-style-landscape")] {
             XCUIDevice.shared.orientation = orientation
+            let landscape = orientation == .landscapeLeft
+            let rotated = NSPredicate { _, _ in
+                (app.frame.width > app.frame.height) == landscape
+            }
+            expectation(for: rotated, evaluatedWith: app)
+            waitForExpectations(timeout: 10)
             XCTAssertTrue(preview.isHittable)
             let attachment = XCTAttachment(screenshot: app.screenshot())
             attachment.name = name
