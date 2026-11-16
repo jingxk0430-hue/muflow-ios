@@ -33,6 +33,7 @@ jobs:
           PREVIEW_TAG: ${{ inputs.tag }}
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
+          [[ "$SOURCE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || { echo 'source_commit must be a full 40-character commit SHA.' >&2; exit 2; }
           test -f artifact/MuFlow-unsigned.ipa
           sha256sum artifact/MuFlow-unsigned.ipa > artifact/SHA256SUMS
           gh release create "$PREVIEW_TAG" --target "$SOURCE_COMMIT" --prerelease \

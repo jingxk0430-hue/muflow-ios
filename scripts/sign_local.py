@@ -130,6 +130,7 @@ def main():
     # TemporaryDirectory is mode 0700. The decrypted private key is removed on exit.
     with tempfile.TemporaryDirectory(prefix='muflow-sign-') as temp:
         folder = Path(temp)
+        (folder / 'work').mkdir(mode=0o700)
         materials = {
             'identity.pem': key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                                serialization.NoEncryption()),
@@ -146,7 +147,7 @@ def main():
             str(args.zsign.resolve()), '-q', '-f', '-k', str(folder / 'identity.pem'),
             '-c', str(folder / 'certificate.pem'), '-m', str(folder / 'profile.mobileprovision'),
             '-e', str(folder / 'entitlements.plist'), '-b', bundle_id,
-            '-n', '幕流', '-o', str(output), '-t', str(folder / 'work'), str(args.input.resolve())
+            '-o', str(output), '-t', str(folder / 'work'), str(args.input.resolve())
         ], capture_output=True, timeout=300)
         if result.returncode:
             if output.exists():
