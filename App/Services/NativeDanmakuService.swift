@@ -8,19 +8,21 @@ struct NativeDanmakuService: Sendable {
         try await commentsWithStatus(url).comments
     }
 
-    func commentsWithStatus(_ url: URL) async throws -> DanmakuLoadResult {
+    func commentsWithStatus(_ source: URL) async throws -> DanmakuLoadResult {
+        let url = try await DanmakuSourceLink.resolve(source)
         let host = url.host?.lowercased() ?? ""
-        if host == "v.qq.com" { return try await tencent(url) }
+        if host == "v.qq.com" || host.hasSuffix(".v.qq.com") { return try await tencent(url) }
         if host == "iqiyi.com" || host.hasSuffix(".iqiyi.com") { return try await iqiyi(url) }
+        if host == "youku.com" || host.hasSuffix(".youku.com") { return try await YoukuDanmakuService().comments(url) }
         if host == "bilibili.com" || host.hasSuffix(".bilibili.com") { return .init(comments: try await bilibili(url)) }
         if host == "mgtv.com" || host.hasSuffix(".mgtv.com") { return try await mgtv(url) }
         throw DanmakuError.empty
     }
 
     private func tencent(_ url: URL) async throws -> DanmakuLoadResult {
-        let identifier = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "vid" }?.value
-            ?? url.deletingPathExtension().lastPathComponent
-        guard identifier.range(of: "^[A-Za-z0-9]{5,32}$", options: .regularExpression) != nil else { throw DanmakuError.empty }
+        guard let identifier = Self.tencentVideoID(url) else {
+            throw ServiceError.rejected("腾讯页面没有单集视频编号，请打开具体一集后复制播放页链接。")
+        }
         let base = try await SiteHTTP.json("https://dm.video.qq.com/barrage/base/" + identifier)
         let index = base["segment_index"] as? [String: Any] ?? [:]
         let names = index.compactMap { key, value in (value as? [String: Any])?["segment_name"] as? String ?? key }
@@ -29,6 +31,18 @@ struct NativeDanmakuService: Sendable {
             return URL(string: "https://dm.video.qq.com/barrage/segment/\(identifier)/\(name)")
         }
         return try await Self.segments(urls, referer: "https://v.qq.com/", parse: Self.tencentSegment)
+    }
+
+    static func tencentVideoID(_ url: URL) -> String? {
+        let host = url.host?.lowercased() ?? ""
+        guard host == "v.qq.com" || host.hasSuffix(".v.qq.com") else { return nil }
+        let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let queryID = parts?.queryItems?.first { $0.name == "vid" }?.value
+        let identifier = queryID ?? url.deletingPathExtension().lastPathComponent
+        guard identifier.range(of: "^[A-Za-z0-9]{5,32}$", options: .regularExpression) != nil else { return nil }
+        // A cover URL without an episode or vid parameter identifies a series, not a video.
+        if queryID == nil, url.path.hasPrefix("/x/cover/"), url.path.split(separator: "/").count < 4 { return nil }
+        return identifier
     }
 
     static func tencentSegment(_ data: Data) throws -> [DanmakuComment] {

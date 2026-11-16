@@ -6,6 +6,8 @@ final class FileImportUITests: XCTestCase {
         let button = app.buttons[identifier]
         XCTAssertTrue(button.waitForExistence(timeout: 15), app.debugDescription)
         for _ in 0..<4 {
+            let passwordPrompt = app.sheets["Save Password?"].buttons["Not Now"]
+            if passwordPrompt.exists && passwordPrompt.isHittable { passwordPrompt.tap() }
             if button.isHittable { break }
             app.swipeUp()
         }

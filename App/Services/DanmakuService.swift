@@ -128,7 +128,7 @@ struct DanmakuService: Sendable {
 
     func commentsWithStatus(link: String) async throws -> DanmakuLoadResult {
         guard let url = URL(string: link), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-              url.host != nil else { throw ServiceError.invalidURL }
+              url.host != nil, url.user == nil, url.password == nil else { throw ServiceError.invalidURL }
         if ["xml", "json"].contains(url.pathExtension.lowercased()) {
             return .init(comments: try DanmakuParser.parse(await Self.download(url)))
         }

@@ -2,6 +2,9 @@
 """Loopback-only, synthetic WebDAV directory for simulator integration tests."""
 import base64
 import json
+import hashlib
+import urllib.parse
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -10,6 +13,36 @@ class Fixture(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path == '/bili-comments':
+            xml = b'<i><d p="1.25,1,25,65280,0,0,0,0">deflated fixture</d></i>'
+            compressor = zlib.compressobj(wbits=-15)
+            data = compressor.compress(xml) + compressor.flush()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/xml')
+            self.send_header('Content-Encoding', 'deflate')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if self.path.startswith('/youku/'):
+            self.send_response(200)
+            if self.path.startswith('/youku/meta'):
+                value = {'duration': 61, 'title': 'Synthetic video'}
+            elif self.path.startswith('/youku/visitor'):
+                self.send_header('Set-Cookie', 'cna=fixture-visitor; Path=/; HttpOnly')
+                value = {}
+            elif self.path.startswith('/youku/session'):
+                self.send_header('Set-Cookie', '_m_h5_tk=0123456789abcdef0123456789abcdef_9999999999999; Path=/; HttpOnly')
+                self.send_header('Set-Cookie', '_m_h5_tk_enc=fixture-encrypted; Path=/; HttpOnly')
+                value = {}
+            else:
+                value = {}
+            data = json.dumps(value).encode()
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.startswith('/unavailable/'):
             self.send_error(503)
             return
@@ -37,6 +70,38 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         data = json.dumps(value).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self):
+        url = urllib.parse.urlsplit(self.path)
+        if url.path != '/youku/comments':
+            self.send_error(404)
+            return
+        body = self.rfile.read(min(int(self.headers.get('Content-Length', '0')), 65536))
+        try:
+            raw = urllib.parse.parse_qs(body.decode())['data'][0]
+            wrapper = json.loads(raw)
+            message = json.loads(base64.b64decode(wrapper['msg']))
+            query = urllib.parse.parse_qs(url.query)
+            expected = hashlib.md5(('0123456789abcdef0123456789abcdef&'+query['t'][0]+'&24679788&'+raw).encode()).hexdigest()
+            valid = (query['sign'][0] == expected
+                     and wrapper['sign'] == hashlib.md5((wrapper['msg']+'MkmC9SoIw6xCkSKHhJ7b5D2r51kBiREr').encode()).hexdigest()
+                     and message['guid'] == 'fixture-visitor'
+                     and message['vid'] == 'XFixtureVideo=='
+                     and message['mat'] == wrapper['mat']
+                     and '_m_h5_tk_enc=fixture-encrypted' in self.headers.get('Cookie', ''))
+        except (ValueError, KeyError, TypeError):
+            valid = False
+        if not valid:
+            self.send_error(403)
+            return
+        inner = {'code': 0, 'data': {'result': [{'playat': wrapper['mat'] * 60000 + 1250,
+                   'content': 'fixture minute '+str(wrapper['mat']), 'propertis': '{"color":65280}'}]}}
+        data = json.dumps({'ret': ['SUCCESS::fixture'], 'data': {'result': json.dumps(inner)}}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(data)))

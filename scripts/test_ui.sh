@@ -20,8 +20,7 @@ raise SystemExit('No available iPhone simulator')
 PY
 )
 xcrun simctl boot "$simulator_id" 2>/dev/null || true
-xcrun simctl bootstatus "$simulator_id" -b
 xcodebuild test -project MuFlow.xcodeproj -scheme MuFlow -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_id" \
-  -derivedDataPath build/UITestDerivedData -resultBundlePath build/FileImportUITests.xcresult \
+  -derivedDataPath build/DerivedData -resultBundlePath build/FileImportUITests.xcresult \
   -parallel-testing-enabled NO -jobs 2 CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=-

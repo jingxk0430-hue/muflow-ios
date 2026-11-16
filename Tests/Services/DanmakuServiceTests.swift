@@ -5,6 +5,29 @@ import WebDAVCore
 
 @MainActor
 final class DanmakuServiceTests: XCTestCase {
+    func testBilibiliHTTPDeflateIsDecodedBeforeXMLParsing() async throws {
+        let data = try await SiteHTTP.data(URL(string: "http://127.0.0.1:18765/bili-comments")!)
+        let comments = try DanmakuParser.parse(data)
+        XCTAssertEqual(comments.first?.text, "deflated fixture")
+        XCTAssertEqual(comments.first?.time, 1.25)
+    }
+
+    func testBilibiliShareLinksStayWithinRecognizedHosts() {
+        XCTAssertTrue(DanmakuSourceLink.isBilibiliShort(URL(string: "https://b23.tv/fixture")!))
+        XCTAssertFalse(DanmakuSourceLink.isBilibiliShort(URL(string: "https://b23.tv.unrelated.test/fixture")!))
+        XCTAssertTrue(DanmakuSourceLink.isRecognizedBilibiliPage(URL(string: "https://m.bilibili.com/video/BV1Fixture?p=2")!))
+        XCTAssertTrue(DanmakuSourceLink.isRecognizedBilibiliPage(URL(string: "https://www.bilibili.com/bangumi/play/ep123")!))
+        XCTAssertFalse(DanmakuSourceLink.isRecognizedBilibiliPage(URL(string: "https://unrelated.test/video/BV1Fixture")!))
+    }
+    func testTencentMobileSharePagesKeepTheirEpisodeID() throws {
+        let mobile = try XCTUnwrap(URL(string: "https://m.v.qq.com/play/play.html?vid=j4101ouc4ve&tracking=1"))
+        XCTAssertEqual(NativeDanmakuService.tencentVideoID(mobile), "j4101ouc4ve")
+        let normalized = try XCTUnwrap(SiteHTTP.mediaPage(mobile.absoluteString))
+        XCTAssertEqual(normalized.absoluteString, "https://m.v.qq.com/play/play.html?vid=j4101ouc4ve")
+        XCTAssertEqual(NativeDanmakuService.tencentVideoID(normalized), "j4101ouc4ve")
+        XCTAssertNil(NativeDanmakuService.tencentVideoID(URL(string: "https://unrelated.test/?vid=j4101ouc4ve")!))
+        XCTAssertNil(NativeDanmakuService.tencentVideoID(URL(string: "https://v.qq.com/x/cover/mzc0020072zgk61.html")!))
+    }
     func testWebDAVCanReturnToRootAfterOpeningChild() async throws {
         let connection = WebDAVConnection(address: "http://127.0.0.1:18765/dav/",
                                           username: "fixture-user", password: "fixture-password")

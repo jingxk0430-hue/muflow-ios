@@ -124,10 +124,15 @@ enum SiteHTTP {
     static func mediaPage(_ value: String) -> URL? {
         guard var parts = URLComponents(string: value), ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
               let host = parts.host?.lowercased(), parts.user == nil, parts.password == nil,
-              ["iqiyi.com", "v.qq.com", "v.youku.com", "mgtv.com", "bilibili.com"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) else { return nil }
+              ["iqiyi.com", "v.qq.com", "youku.com", "mgtv.com", "bilibili.com", "b23.tv"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) else { return nil }
         // Canonical pages avoid tracking parameters and use the same HTTPS routes as desktop parsers.
         parts.scheme = "https"
-        if parts.path.hasSuffix(".html") { parts.query = nil }
+        if parts.path.hasSuffix(".html") {
+            // Mobile Tencent share pages put the actual episode in ?vid=.
+            let videoID = (host == "v.qq.com" || host.hasSuffix(".v.qq.com"))
+                ? parts.queryItems?.filter { $0.name == "vid" } : nil
+            parts.queryItems = videoID?.isEmpty == false ? videoID : nil
+        }
         return parts.url
     }
 
