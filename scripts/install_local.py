@@ -47,7 +47,7 @@ def main():
     def lookup():
         output = command('ideviceinstaller', '-u', udid, 'list', '--xml', '-b', bundle_id,
                          '-a', 'CFBundleIdentifier', '-a', 'CFBundleName', '-a', 'CFBundleVersion',
-                         '-a', 'CFBundleShortVersionString')
+                         '-a', 'CFBundleShortVersionString', '-a', 'CFBundleExecutable', '-a', 'CFBundleDisplayName')
         start = output.find(b'<?xml')
         if start < 0:
             raise ValueError('Installed-app lookup did not return a verifiable property list.')
@@ -74,7 +74,9 @@ def main():
     if expected.get('CFBundleName') != 'MuFlow':
         raise ValueError('The signed package is not the expected MuFlow app.')
     if old is not None:
-        if old.get('CFBundleName') != 'MuFlow':
+        if (old.get('CFBundleName') not in {'MuFlow', '幕流'}
+                or old.get('CFBundleExecutable') != 'MuFlow'
+                or old.get('CFBundleDisplayName') != '幕流'):
             raise ValueError('Another app already uses this signing identifier; installation stopped to preserve it.')
         if not args.replace_existing_muflow:
             raise ValueError('MuFlow is already installed; use --replace-existing-muflow for an intentional update.')

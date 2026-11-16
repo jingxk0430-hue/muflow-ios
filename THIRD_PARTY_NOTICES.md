@@ -11,7 +11,8 @@
 
 - Source: https://github.com/Tony15246/uosc_danmaku
 - License: MIT, Copyright (c) 2024 吴南李.
-- The desktop configuration and public endpoint conventions informed this independent Swift implementation. Desktop scripts and credential-bearing configuration are not bundled.
+- Source-site protocol logic in `NativeDanmakuService.swift` and `TVSearchService.swift` is adapted from the desktop `sites` parsers and `apis/extra.lua`. Copyright (c) 2024 吴南李 and contributors. Desktop scripts and credential-bearing configuration are not bundled.
+- Full license and copyright notice: [uosc_danmaku-MIT.txt](App/Resources/Licenses/uosc_danmaku-MIT.txt), also shipped in the app resources.
 
 ## zsign (optional local tooling)
 

@@ -19,7 +19,14 @@ enum ServiceError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidURL: "请输入有效的 HTTP 或 HTTPS 地址。"
-        case .http: "弹幕服务暂时无法访问，请稍后重试或更换服务地址。"
+        case .http(let status):
+            switch status {
+            case 401, 403: "弹幕服务拒绝访问，请检查服务的访问限制或更换线路。"
+            case 404: "服务未找到对应弹幕或不支持此接口，请换一个结果或来源链接。"
+            case 429: "弹幕服务请求过于频繁，请稍等后重试。"
+            case 500...599: "弹幕服务器暂时故障，请稍后重试或更换线路。"
+            default: "弹幕服务返回异常，请重试或更换线路。"
+            }
         case .rejected(let message): message.isEmpty ? "弹幕服务未返回结果，请换个关键词重试。" : message
         }
     }
@@ -27,10 +34,11 @@ enum ServiceError: Error, LocalizedError {
 
 struct DanmakuService: Sendable {
     let server: String
+    let alternateServer: String
     let fallback: String
 
-    private func endpoint(_ path: String, query: [URLQueryItem] = []) throws -> URL {
-        guard var components = URLComponents(string: server.trimmingCharacters(in: .whitespacesAndNewlines)),
+    private func endpoint(_ base: String, _ path: String, query: [URLQueryItem] = []) throws -> URL {
+        guard var components = URLComponents(string: base.trimmingCharacters(in: .whitespacesAndNewlines)),
               ["https", "http"].contains(components.scheme?.lowercased() ?? ""),
               components.host != nil else { throw ServiceError.invalidURL }
         components.path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -59,19 +67,37 @@ struct DanmakuService: Sendable {
         return data
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, from url: URL) async throws -> T {
-        let data = try await Self.download(url)
-        if let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           status["success"] as? Bool == false {
-            throw ServiceError.rejected(status["errorMessage"] as? String ?? "")
+    private func request(_ path: String, query: [URLQueryItem] = []) async throws -> Data {
+        var previous: Error = ServiceError.invalidURL
+        var visited = Set<String>()
+        for base in [server, alternateServer] {
+            let base = base.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !base.isEmpty, visited.insert(base.trimmingCharacters(in: CharacterSet(charactersIn: "/"))).inserted else { continue }
+            do {
+                let url = try endpoint(base, path, query: query)
+                let data = try await Self.download(url)
+                try Task.checkCancellation()
+                if let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   status["success"] as? Bool == false {
+                    throw ServiceError.rejected(status["errorMessage"] as? String ?? "")
+                }
+                return data
+            } catch is CancellationError { throw CancellationError() }
+            catch {
+                try Task.checkCancellation()
+                previous = error
+            }
         }
-        return try JSONDecoder().decode(type, from: data)
+        throw previous
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, path: String, query: [URLQueryItem] = []) async throws -> T {
+        try await JSONDecoder().decode(type, from: request(path, query: query))
     }
 
     func search(_ keyword: String) async throws -> [AnimeResult] {
         struct Response: Decodable { let animes: [AnimeResult] }
-        let url = try endpoint("/api/v2/search/anime", query: [.init(name: "keyword", value: keyword)])
-        return try await decode(Response.self, from: url).animes
+        return try await decode(Response.self, path: "/api/v2/search/anime", query: [.init(name: "keyword", value: keyword)]).animes
     }
 
     func episodes(_ anime: AnimeResult) async throws -> [EpisodeResult] {
@@ -79,14 +105,14 @@ struct DanmakuService: Sendable {
             struct Bangumi: Decodable { let episodes: [EpisodeResult] }
             let bangumi: Bangumi
         }
-        return try await decode(Response.self, from: endpoint("/api/v2/bangumi/\(anime.animeId)")).bangumi.episodes
+        return try await decode(Response.self, path: "/api/v2/bangumi/\(anime.animeId)").bangumi.episodes
     }
 
     func comments(episode: Int) async throws -> [DanmakuComment] {
-        let url = try endpoint("/api/v2/comment/\(episode)", query: [
+        let data = try await request("/api/v2/comment/\(episode)", query: [
             .init(name: "withRelated", value: "true"), .init(name: "chConvert", value: "0")
         ])
-        return try DanmakuParser.parse(await Self.download(url))
+        return try DanmakuParser.parse(data)
     }
 
     func comments(link: String) async throws -> [DanmakuComment] {
@@ -96,8 +122,13 @@ struct DanmakuService: Sendable {
             return try DanmakuParser.parse(await Self.download(url))
         }
         do {
-            let request = try endpoint("/api/v2/extcomment", query: [.init(name: "url", value: link)])
-            let comments = try DanmakuParser.parse(await Self.download(request))
+            let comments = try await NativeDanmakuService().comments(url)
+            if !comments.isEmpty { return comments }
+        } catch is CancellationError { throw CancellationError() }
+        catch { try Task.checkCancellation() }
+        do {
+            let data = try await request("/api/v2/extcomment", query: [.init(name: "url", value: link)])
+            let comments = try DanmakuParser.parse(data)
             guard !comments.isEmpty else { throw DanmakuError.empty }
             return comments
         } catch is CancellationError { throw CancellationError() }

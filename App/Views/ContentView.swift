@@ -53,6 +53,7 @@ struct ContentView: View {
                 if case .failure = result { model.error = "弹幕导出未完成，请重试。" }
             }
             .alert("操作未完成", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+                if model.commentsFailed { Button("重试弹幕") { model.retryComments() } }
                 Button("知道了", role: .cancel) { model.error = nil }
             } message: { Text(model.error ?? "") }
             .onChange(of: scenePhase) { _, phase in

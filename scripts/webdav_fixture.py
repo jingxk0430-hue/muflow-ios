@@ -1,12 +1,31 @@
 #!/usr/bin/env python3
 """Loopback-only, synthetic WebDAV directory for simulator integration tests."""
 import base64
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class Fixture(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
+
+    def do_GET(self):
+        if self.path.startswith('/unavailable/'):
+            self.send_error(503)
+            return
+        if self.path.startswith('/backup/api/v2/search/anime'):
+            value = {'animes': [{'animeId': 123, 'animeTitle': 'Synthetic series', 'episodeCount': 1}], 'success': True}
+        elif self.path.startswith('/backup/api/v2/comment/123001'):
+            value = {'comments': [{'p': '1.5,1,16777215,fixture', 'm': 'synthetic comment'}], 'count': 1}
+        else:
+            self.send_error(404)
+            return
+        data = json.dumps(value).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_PROPFIND(self):
         expected = 'Basic ' + base64.b64encode(b'fixture-user:fixture-password').decode()

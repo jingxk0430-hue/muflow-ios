@@ -11,6 +11,7 @@ struct WebDAVView: View {
     @State private var items: [WebDAVItem] = []
     @State private var loading = false
     @State private var error: String?
+    @State private var credentialsWarning: String?
     @State private var task: Task<Void, Never>?
 
     var body: some View {
@@ -82,6 +83,7 @@ struct WebDAVView: View {
                     Spacer()
                     if loading { ProgressView() }
                 }
+                if let credentialsWarning { Text(credentialsWarning).font(.footnote).foregroundStyle(.orange) }
                 if folders.count > 1 {
                     Button("返回上一级", systemImage: "arrow.up") {
                         guard let connected else { return }
@@ -141,7 +143,14 @@ struct WebDAVView: View {
                 let incoming = try await WebDAVService(connection: candidate).list(folder)
                 try Task.checkCancellation()
                 if newConnection {
-                    if remember { try WebDAVKeychain.save(candidate) } else { try WebDAVKeychain.delete() }
+                    credentialsWarning = nil
+                    do {
+                        if remember { try WebDAVKeychain.save(candidate) } else { try WebDAVKeychain.delete() }
+                    } catch {
+                        credentialsWarning = remember
+                            ? "已连接，但登录信息未能保存；下次需重新填写。"
+                            : "已连接，但之前保存的登录未能清除，请稍后再试。"
+                    }
                     connected = candidate; folders = [folder]
                 } else if goBack { folders.removeLast() }
                 else if !refresh { folders.append(folder) }

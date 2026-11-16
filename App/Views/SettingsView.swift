@@ -32,9 +32,11 @@ struct SettingsView: View {
                 Section("弹幕服务") {
                     TextField("主服务地址", text: $model.server).keyboardType(.URL)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("备用弹弹play服务", text: $model.alternateServer).keyboardType(.URL)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("备用解析地址", text: $model.fallback).keyboardType(.URL)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Text("沿用电脑上的弹幕服务。加载来源链接时，会将该链接发送给服务解析。")
+                    Text("主服务失败后会尝试备用弹弹play服务。搜索关键词、剧集编号或主动添加的来源链接会发送给这些服务；备用地址可留空。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section {

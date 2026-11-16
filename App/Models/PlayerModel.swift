@@ -20,9 +20,12 @@ final class PlayerModel {
         didSet { if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: "danmaku.settings") } }
     }
     var server: String { didSet { UserDefaults.standard.set(server, forKey: "danmaku.server") } }
+    var alternateServer: String { didSet { UserDefaults.standard.set(alternateServer, forKey: "danmaku.alternateServer") } }
     var fallback: String { didSet { UserDefaults.standard.set(fallback, forKey: "danmaku.fallback") } }
     var isLoadingComments = false
     var sourceTitle = "尚未加载弹幕"
+    var commentsFailed = false
+    @ObservationIgnored private var retryCommentsAction: (@MainActor () -> Void)?
     @ObservationIgnored private var mediaID = UUID()
     @ObservationIgnored private var scopedURL: URL?
     @ObservationIgnored private var playbackURL: URL?
@@ -36,7 +39,7 @@ final class PlayerModel {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         return folder.appendingPathComponent(hash + ".xml")
     }
-    var service: DanmakuService { .init(server: server, fallback: fallback) }
+    var service: DanmakuService { .init(server: server, alternateServer: alternateServer, fallback: fallback) }
     var position: Double { durationSeconds(player.position) }
     var duration: Double { durationSeconds(player.duration) }
     var visibleComments: [DanmakuComment] {
@@ -52,11 +55,13 @@ final class PlayerModel {
         settings = UserDefaults.standard.data(forKey: "danmaku.settings")
             .flatMap { try? JSONDecoder().decode(DanmakuSettings.self, from: $0) } ?? .init()
         server = UserDefaults.standard.string(forKey: "danmaku.server") ?? "https://danmaku-api.152468.xyz"
+        alternateServer = UserDefaults.standard.string(forKey: "danmaku.alternateServer") ?? "https://danmaku-us.152468.xyz"
         fallback = UserDefaults.standard.string(forKey: "danmaku.fallback") ?? "https://dmku.hls.one"
     }
 
     func open(_ url: URL, playbackURL: URL? = nil) {
         commentsTask?.cancel(); isLoadingComments = false
+        retryCommentsAction = nil; commentsFailed = false
         if let previous = scopedURL { previous.stopAccessingSecurityScopedResource(); scopedURL = nil }
         if url.isFileURL, url.startAccessingSecurityScopedResource() { scopedURL = url }
         mediaID = UUID(); mediaURL = url; error = nil
@@ -90,18 +95,21 @@ final class PlayerModel {
     }
 
     func load(episode: EpisodeResult, anime: String, append: Bool) {
+        retryCommentsAction = { [weak self] in self?.load(episode: episode, anime: anime, append: append) }
         let service = service
         loadComments(title: "\(anime) · \(episode.episodeTitle)", append: append) {
             try await service.comments(episode: episode.episodeId)
         }
     }
 
-    func load(link: String, append: Bool) {
+    func load(link: String, append: Bool, title: String? = nil) {
+        retryCommentsAction = { [weak self] in self?.load(link: link, append: append, title: title) }
         let service = service
-        loadComments(title: "链接弹幕", append: append) { try await service.comments(link: link) }
+        loadComments(title: title ?? "链接弹幕", append: append) { try await service.comments(link: link) }
     }
 
     func importComments(_ url: URL, append: Bool = false) {
+        retryCommentsAction = { [weak self] in self?.importComments(url, append: append) }
         loadComments(title: "本地弹幕 · \(url.lastPathComponent)", append: append) {
             try await Task.detached {
                 let access = url.startAccessingSecurityScopedResource()
@@ -118,7 +126,7 @@ final class PlayerModel {
         guard mediaURL != nil else { error = "请先打开一个视频，再为它加载弹幕。"; return }
         commentsTask?.cancel()
         let generation = mediaID
-        isLoadingComments = true; error = nil
+        isLoadingComments = true; error = nil; commentsFailed = false
         commentsTask = Task { [weak self] in
             do {
                 let incoming = try await operation()
@@ -137,16 +145,24 @@ final class PlayerModel {
                     catch { self.status += "；本地保存失败，可手动导出" }
                 }
                 self.isLoadingComments = false
+                self.retryCommentsAction = nil
             } catch {
                 guard !Task.isCancelled, let self, self.mediaID == generation else { return }
                 self.isLoadingComments = false
+                self.commentsFailed = true
                 self.error = (error as? LocalizedError)?.errorDescription ?? "弹幕加载失败，已保留原有弹幕和输入，请重试。"
             }
         }
     }
 
+    func retryComments() {
+        error = nil
+        retryCommentsAction?()
+    }
+
     func clearComments() {
         commentsTask?.cancel(); isLoadingComments = false
+        retryCommentsAction = nil; commentsFailed = false
         comments = []; commentRevision = UUID(); sourceTitle = "尚未加载弹幕"
         if let cacheURL { try? FileManager.default.removeItem(at: cacheURL) }
     }

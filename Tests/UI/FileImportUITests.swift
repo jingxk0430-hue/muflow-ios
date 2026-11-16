@@ -23,6 +23,13 @@ final class FileImportUITests: XCTestCase {
         app.buttons["webdavParent"].tap()
         XCTAssertTrue(folder.waitForExistence(timeout: 15))
         app.buttons["closeWebDAV"].tap()
+        app.terminate()
+        app.launch()
+        app.buttons["openWebDAV"].tap()
+        let restored = app.textFields["webdavAddress"]
+        XCTAssertTrue(restored.waitForExistence(timeout: 10))
+        XCTAssertEqual(restored.value as? String, "http://127.0.0.1:18765/dav/", "Login must survive an app restart in the Keychain")
+        app.buttons["closeWebDAV"].tap()
         app.buttons["openLocalVideo"].tap()
         XCTAssertTrue(app.buttons["Cancel"].firstMatch.waitForExistence(timeout: 10))
         app.buttons["Cancel"].firstMatch.tap()

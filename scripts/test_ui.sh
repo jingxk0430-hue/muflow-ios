@@ -22,4 +22,4 @@ PY
 xcodebuild test -project MuFlow.xcodeproj -scheme MuFlow -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_id" \
   -derivedDataPath build/UITestDerivedData -resultBundlePath build/FileImportUITests.xcresult \
-  -parallel-testing-enabled NO -jobs 2 CODE_SIGNING_ALLOWED=NO
+  -parallel-testing-enabled NO -jobs 2 CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=-
