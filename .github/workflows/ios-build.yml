@@ -26,6 +26,7 @@ jobs:
       - name: Validate project and credential exclusions
         run: python3 scripts/validate_project.py
       - name: Test local video picker in an iPhone simulator
+        timeout-minutes: 15
         run: bash scripts/test_ui.sh
       - name: Upload file picker UI test evidence
         if: always()
