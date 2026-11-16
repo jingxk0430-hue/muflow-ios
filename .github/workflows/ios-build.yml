@@ -25,6 +25,15 @@ jobs:
         run: swift test --package-path Packages/WebDAVCore
       - name: Validate project and credential exclusions
         run: python3 scripts/validate_project.py
+      - name: Compile unsigned device app
+        run: bash scripts/build_ios.sh
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: MuFlow-unsigned
+          path: build/MuFlow-unsigned.ipa
+          retention-days: 3
+          if-no-files-found: error
       - name: Test local video picker in an iPhone simulator
         timeout-minutes: 15
         run: bash scripts/test_ui.sh
@@ -35,12 +44,3 @@ jobs:
           name: FileImportUITests
           path: build/FileImportUITests.xcresult
           retention-days: 3
-      - name: Compile unsigned device app
-        run: bash scripts/build_ios.sh
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
-        with:
-          name: MuFlow-unsigned
-          path: build/MuFlow-unsigned.ipa
-          retention-days: 3
-          if-no-files-found: error
