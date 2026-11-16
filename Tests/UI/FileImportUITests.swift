@@ -1,6 +1,27 @@
 import XCTest
+import UIKit
 
 final class FileImportUITests: XCTestCase {
+    @MainActor
+    func testDanmakuStylePreviewInBothOrientations() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.buttons["设置"].tap()
+        let preview = app.descendants(matching: .any)["danmakuStylePreview"].firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        defer { XCUIDevice.shared.orientation = .portrait }
+        for (orientation, name) in [(UIDeviceOrientation.portrait, "danmaku-style-portrait"),
+                                    (.landscapeLeft, "danmaku-style-landscape")] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertTrue(preview.isHittable)
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
     @MainActor
     private func tapVisibleButton(_ identifier: String, in app: XCUIApplication) {
         let button = app.buttons[identifier]

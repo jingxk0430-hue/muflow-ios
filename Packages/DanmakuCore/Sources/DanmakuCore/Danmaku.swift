@@ -137,17 +137,28 @@ private final class XMLDanmakuDelegate: NSObject, XMLParserDelegate {
 
 public struct DanmakuSettings: Codable, Equatable, Sendable {
     public var opacity = 0.84
-    public var displayArea = 0.62
-    public var fontSize = 24.0
+    public var displayArea = 0.5
+    public var fontSize = 20.0
     public var scrollDuration = 15.0
     public var fixedDuration = 5.0
-    public var maximumOnScreen = 58
+    public var maximumOnScreen = 30
     public var mergeTolerance = 1.0
     public var simplifiedChinese = true
-    public var outline = 2.0
+    public var outline = 0.65
     public var delay = 0.0
     public var enabled = true
     public init() {}
+
+    /// Replace only unchanged legacy defaults; keep custom styles and synchronization.
+    public func migratingLegacyAppearance() -> Self {
+        var result = self
+        let defaults = Self()
+        if result.fontSize == 24 { result.fontSize = defaults.fontSize }
+        if result.outline == 2 { result.outline = defaults.outline }
+        if result.displayArea == 0.62 { result.displayArea = defaults.displayArea }
+        if result.maximumOnScreen == 58 { result.maximumOnScreen = defaults.maximumOnScreen }
+        return result
+    }
 }
 
 public enum DanmakuProcessing {
@@ -186,7 +197,7 @@ public struct DanmakuTimeline: Sendable {
                 settings: DanmakuSettings, measure: (String, Double) -> Double) {
         guard width > 0, height > 0 else { return }
         let fontSize = min(60, max(12, settings.fontSize))
-        let lineHeight = fontSize * 1.4
+        let lineHeight = fontSize * 1.4 + ceil(min(3, max(0, settings.outline))) * 2 + 2
         let area = height * min(1, max(0.1, settings.displayArea))
         let laneCount = max(1, Int(area / lineHeight))
         var lanes = Array<ScheduledDanmaku?>(repeating: nil, count: laneCount)

@@ -57,7 +57,7 @@ jobs:
           from pathlib import Path
           version, commit, run = sys.argv[1:]
           Path('build/release-notes.txt').write_text(
-              f'MuFlow {version} iOS 26 preview. Includes local video import, WebDAV, Youku / iQiyi / Tencent / Bilibili source danmaku, mobile share links, validated API failover, partial segment recovery and on-device connection checks.\n\n'
+              f'MuFlow {version} iOS 26 preview. Refines danmaku typography with regular-weight text, native-resolution glyph outlines, lighter defaults and a live settings preview. Includes local video import, WebDAV and Youku / iQiyi / Tencent / Bilibili source danmaku.\n\n'
               f'Source: {commit}. Device compilation and automated checks passed: https://github.com/jingxk0430-hue/muflow-ios/actions/runs/{run}\n\n'
               'Unsigned IPA: a valid certificate and registered-device profile are required for installation. No signing credentials are included. Actual phone connectivity and playback still require real-device verification.\n')
           PY
