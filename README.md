@@ -1,0 +1,62 @@
+# 幕流 MuFlow
+
+面向 iOS 26 的个人视频与弹幕播放器。视频播放使用 MPVUI / libmpv，弹幕通过独立 Swift 时间轴绘制。
+
+## 当前阶段
+
+第一版开发中。源码检查、云端编译、IPA 签名、设备安装、实际视频播放与弹幕同步是独立的验收阶段；源码存在不表示已完成真机验证。
+
+## 首期功能
+
+- 从“文件”打开本地视频、音频和网络媒体直链。
+- 播放、暂停、进度跳转、倍速、音轨选择、字幕选择与外挂字幕导入。
+- 搜索弹弹play兼容弹幕服务、选择作品和剧集、从来源链接加载弹幕。
+- 导入 Bilibili XML、弹弹play JSON 和 `c/m` JSON 弹幕，导出 XML。
+- 支持滚动、顶部和底部弹幕，去重、简体转换、样式与全局时间偏移。
+- 默认不透明度 84%、显示区域 62%、同屏上限 58 条；字号按手机适配为 24 点。
+- 为当前视频自动保存弹幕，重新打开同一地址时恢复；网络地址变化时视为另一视频。
+
+网络视频输入目前要求媒体直链，不包含桌面版 yt-dlp 网页解析。弹幕源链接解析依赖配置的服务能力。高级弹幕、逐来源独立偏移、NAS 媒体库、画中画、后台播放及自动文件哈希匹配不属于本次已验证能力。
+
+## 不需要自备 Mac 的构建流程
+
+1. 在自己的 GitHub 账号创建公开仓库并上传源码。
+2. 在 Actions 中手动运行 **Build iOS IPA**。工作流只使用标准 `macos-26` 运行器。
+3. 下载 `MuFlow-unsigned` 工件，其中包含未签名的 IPA。
+4. 在本地 Linux 使用自己的证书签名，再安装到已登记的 iPhone。
+
+公开仓库标准运行器的计算使用按 GitHub 当前规则免费；工件只保留 3 天。工作流不包含大型付费运行器、证书、账号密码或生产业务配置。
+
+## 本地检查
+
+```bash
+python3 scripts/validate_project.py
+# macOS / Xcode 环境下执行实际单元测试与编译
+swift test --package-path Packages/DanmakuCore
+bash scripts/build_ios.sh
+```
+
+依赖固定在 MPVUI `0.10.0` 的提交 `cd2da733a17da6be94d451b5785c908801a4ee22`，需要带 Swift 6.3 或更新版本的 Xcode。工作流会从运行器已安装的 Xcode 中选择满足要求的版本，找不到时明确失败。
+
+## 本地签名
+
+需要 Python `cryptography`、OpenSSL，以及从上游源码构建的 zsign。传入证书压缩包路径；脚本在内存中读取密码材料，不将密码作为命令参数，不把证书复制进项目。
+
+```bash
+python3 scripts/sign_local.py --certificate-archive /private/path/certificate.zip --inspect
+python3 scripts/sign_local.py \
+  --certificate-archive /private/path/certificate.zip \
+  --input /private/path/MuFlow-unsigned.ipa \
+  --output dist/MuFlow-signed.ipa \
+  --zsign /private/path/zsign
+```
+
+签名只申请播放器所需的最小标识权限。原始描述文件中的 HealthKit、VPN、HomeKit 等权限不会全部复制到应用签名。签名脚本检查证书、私钥、描述文件、有效期与签名后包标识；在线吊销状态及实际设备安装仍需另外验证。
+
+## 隐私
+
+视频和弹幕文件保存在手机。搜索关键词、选定剧集编号、用户主动添加的来源链接会发送给配置的弹幕服务。应用不包含遥测、登录账号、推送通知或自动客户业务操作。
+
+## 许可
+
+本项目按 GPL-3.0-or-later 发布；第三方依赖见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

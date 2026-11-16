@@ -1,0 +1,73 @@
+name: MuFlow
+options:
+  minimumXcodeGenVersion: 2.42.0
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+packages:
+  MPVUI:
+    url: https://github.com/LePips/MPVUI.git
+    revision: cd2da733a17da6be94d451b5785c908801a4ee22
+  DanmakuCore:
+    path: Packages/DanmakuCore
+targets:
+  MuFlow:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: App
+    dependencies:
+      - package: MPVUI
+        product: MPVUI
+      - package: DanmakuCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.muflow.player
+        PRODUCT_NAME: MuFlow
+        TARGETED_DEVICE_FAMILY: "1,2"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Manual
+    info:
+      path: build/Info.plist
+      properties:
+        CFBundleDisplayName: 幕流
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        NSLocalNetworkUsageDescription: 用于播放你选择的局域网视频链接。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: 视频与音频
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.movie
+              - public.video
+              - public.audio
+              - public.audiovisual-content
+          - CFBundleTypeName: 弹幕文件
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.xml
+              - public.json
+schemes:
+  MuFlow:
+    build:
+      targets:
+        MuFlow: all
+    archive:
+      config: Release
