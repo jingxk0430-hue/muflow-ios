@@ -6,9 +6,8 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @Bindable var model: PlayerModel
     @Environment(\.scenePhase) private var scenePhase
-    @State private var importingVideo = false
-    @State private var importingDanmaku = false
-    @State private var importingSubtitle = false
+    @State private var importingFile = false
+    @State private var importKind = FileImportKind.video
     @State private var showingURL = false
     @State private var showingSearch = false
     @State private var showingSettings = false
@@ -43,32 +42,10 @@ struct ContentView: View {
             .sheet(isPresented: $showingURL) { urlSheet }
             .sheet(isPresented: $showingSearch) { DanmakuSearchView(model: model) }
             .sheet(isPresented: $showingSettings) { SettingsView(model: model) }
-            .fileImporter(isPresented: $importingVideo, allowedContentTypes: [.movie, .video, .audio, .data]) { result in
-                switch result {
-                case .success(let url): model.open(url)
-                case .failure: model.error = "未能打开视频文件，请重新选择。"
-                }
-            }
-            .fileImporter(isPresented: $importingDanmaku, allowedContentTypes: [.xml, .json, .data]) { result in
-                switch result {
-                case .success(let url): model.importComments(url)
-                case .failure: model.error = "未能读取弹幕文件，请重新选择。"
-                }
-            }
-            .fileImporter(isPresented: $importingSubtitle, allowedContentTypes: [.text, .data]) { result in
-                switch result {
-                case .success(let url):
-                    do {
-                        let access = url.startAccessingSecurityScopedResource()
-                        defer { if access { url.stopAccessingSecurityScopedResource() } }
-                        let target = FileManager.default.temporaryDirectory
-                            .appendingPathComponent(UUID().uuidString + "." + url.pathExtension)
-                        try FileManager.default.copyItem(at: url, to: target)
-                        model.player.loadExternalSubtitle(target)
-                    } catch { model.error = "字幕文件无法导入，请重试。" }
-                case .failure: model.error = "未能读取字幕文件。"
-                }
-            }
+            // One presentation host for every import. Stacking fileImporter modifiers
+            // on the same view can leave the earlier import buttons without a dialog.
+            .fileImporter(isPresented: $importingFile, allowedContentTypes: importKind.contentTypes,
+                          onCompletion: handleImport)
             .fileExporter(isPresented: $exporting, document: DanmakuDocument(data: DanmakuParser.xml(model.comments)),
                           contentType: .xml, defaultFilename: "弹幕.xml") { result in
                 if case .failure = result { model.error = "弹幕导出未完成，请重试。" }
@@ -170,7 +147,7 @@ struct ContentView: View {
                 ForEach(model.player.subtitleTracks, id: \.mpvID) { track in
                     Button(trackLabel(track)) { model.player.selectTrack(track.id) }
                 }
-                Button("导入字幕文件") { importingSubtitle = true }
+                Button("导入字幕文件") { beginImport(.subtitle) }
             }
         } label: { Image(systemName: "captions.bubble") }
     }
@@ -183,8 +160,10 @@ struct ContentView: View {
                     Text(model.status).font(.footnote).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 12) {
-                    Button { importingVideo = true } label: { Label("本地视频", systemImage: "folder") }
+                    Button { beginImport(.video) } label: { Label("本地视频", systemImage: "folder") }
+                        .accessibilityIdentifier("openLocalVideo")
                     Button { showingURL = true } label: { Label("网络链接", systemImage: "link") }
+                        .accessibilityIdentifier("openNetworkVideo")
                 }.buttonStyle(.borderedProminent).controlSize(.large)
                 VStack(alignment: .leading, spacing: 14) {
                     HStack {
@@ -197,7 +176,8 @@ struct ContentView: View {
                     HStack {
                         Button("搜索弹幕", systemImage: "magnifyingglass") { showingSearch = true }
                         Spacer()
-                        Button("导入文件", systemImage: "square.and.arrow.down") { importingDanmaku = true }
+                        Button("导入文件", systemImage: "square.and.arrow.down") { beginImport(.danmaku) }
+                            .accessibilityIdentifier("importDanmaku")
                     }
                     if !model.comments.isEmpty {
                         HStack {
@@ -231,13 +211,55 @@ struct ContentView: View {
                     if let networkError { Text(networkError).font(.footnote).foregroundStyle(.orange) }
                 }
             }.navigationTitle("网络视频").toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭") { showingURL = false } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("关闭") { showingURL = false }.accessibilityIdentifier("closeNetworkVideo")
+                }
             }
         }.presentationDetents([.medium, .large])
     }
 
     private func trackLabel(_ track: MPVMediaTrack) -> String {
         (track.isSelected ? "✓ " : "") + (track.title ?? track.language ?? "轨道 \(track.mpvID)")
+    }
+
+    private func beginImport(_ kind: FileImportKind) {
+        importKind = kind
+        importingFile = true
+    }
+
+    private func handleImport(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            switch importKind {
+            case .video: model.open(url)
+            case .danmaku: model.importComments(url)
+            case .subtitle:
+                do {
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    let target = FileManager.default.temporaryDirectory
+                        .appendingPathComponent(UUID().uuidString + "." + url.pathExtension)
+                    try FileManager.default.copyItem(at: url, to: target)
+                    model.player.loadExternalSubtitle(target)
+                } catch { model.error = "字幕文件无法导入，请重试。" }
+            }
+        case .failure(let error):
+            // Closing the picker is a normal action, not an import failure.
+            guard (error as NSError).code != NSUserCancelledError else { return }
+            model.error = "未能读取所选文件，请重新选择。"
+        }
+    }
+}
+
+private enum FileImportKind {
+    case video, danmaku, subtitle
+
+    var contentTypes: [UTType] {
+        switch self {
+        case .video: [.movie, .video, .audio, .data]
+        case .danmaku: [.xml, .json, .data]
+        case .subtitle: [.text, .data]
+        }
     }
 }
 
