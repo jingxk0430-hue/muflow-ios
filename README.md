@@ -53,6 +53,21 @@ python3 scripts/sign_local.py \
 
 签名只申请播放器所需的最小标识权限。原始描述文件中的 HealthKit、VPN、HomeKit 等权限不会全部复制到应用签名。签名脚本检查证书、私钥、描述文件、有效期与签名后包标识；在线吊销状态及实际设备安装仍需另外验证。
 
+## USB 安装与回查
+
+Linux 上需要 libimobiledevice 工具和 ideviceinstaller。可从系统发行版的正式软件仓库安装，也可将对应 DEB 解包到独立工具目录；后者不修改全局系统安装。
+
+```bash
+python3 scripts/install_local.py \
+  --certificate-archive /private/path/certificate.zip \
+  --tools-root /private/path/device-tools --inspect-only
+python3 scripts/install_local.py \
+  --certificate-archive /private/path/certificate.zip \
+  --tools-root /private/path/device-tools --input dist/MuFlow-signed.ipa
+```
+
+安装前只查询目标应用标识，核对当前 USB 设备是否已登记。若同标识已有其他应用，停止安装；已有 MuFlow 的更新需显式提供 `--replace-existing-muflow`。安装后独立回查版本并保存本地回执，不把“安装成功”等同于“实际播放与弹幕验证通过”。
+
 ## 隐私
 
 视频和弹幕文件保存在手机。搜索关键词、选定剧集编号、用户主动添加的来源链接会发送给配置的弹幕服务。应用不包含遥测、登录账号、推送通知或自动客户业务操作。

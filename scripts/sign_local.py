@@ -126,7 +126,7 @@ def main():
     output = args.output.resolve()
     if output.exists():
         raise ValueError('Output already exists; choose a new output path.')
-    output.parent.mkdir(parents=True, exist_ok=True)
+    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # TemporaryDirectory is mode 0700. The decrypted private key is removed on exit.
     with tempfile.TemporaryDirectory(prefix='muflow-sign-') as temp:
         folder = Path(temp)
@@ -156,8 +156,10 @@ def main():
     if signed_info.get('CFBundleIdentifier') != bundle_id or signed_profile != profile_bytes:
         raise ValueError('Signed IPA independent metadata readback failed.')
     output.chmod(0o600)
+    with output.open('rb') as stream:
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
     print(json.dumps({'signed_ipa': str(output), 'profile_and_bundle_readback': 'passed',
-                      'sha256': hashlib.sha256(output.read_bytes()).hexdigest(),
+                      'sha256': digest,
                       'installed': False, 'runtime_validated': False}, ensure_ascii=False))
 
 
