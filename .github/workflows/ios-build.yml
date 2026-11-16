@@ -2,7 +2,7 @@ name: Build iOS IPA
 on:
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: ios-build-${{ github.ref }}
   cancel-in-progress: true
@@ -44,3 +44,23 @@ jobs:
           name: FileImportUITests
           path: build/FileImportUITests.xcresult
           retention-days: 3
+      - name: Publish validated unsigned preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version=$(python3 -c 'import re; print(re.search(r"MARKETING_VERSION: \"([^\"]+)\"", open("project.yml").read())[1])')
+          tag="v${version}-preview"
+          (cd build && shasum -a 256 MuFlow-unsigned.ipa > SHA256SUMS)
+          python3 - "$version" "$GITHUB_SHA" "$GITHUB_RUN_ID" <<'PY'
+          import sys
+          from pathlib import Path
+          version, commit, run = sys.argv[1:]
+          Path('build/release-notes.txt').write_text(
+              f'MuFlow {version} iOS 26 preview. Includes local video import, WebDAV, TV-source search, validated API failover, partial segment recovery and on-device connection checks.\n\n'
+              f'Source: {commit}. Device compilation and automated checks passed: https://github.com/jingxk0430-hue/muflow-ios/actions/runs/{run}\n\n'
+              'Unsigned IPA: a valid certificate and registered-device profile are required for installation. No signing credentials are included. Actual phone connectivity and playback still require real-device verification.\n')
+          PY
+          gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
+            --title "MuFlow ${version} iOS preview" --notes-file build/release-notes.txt \
+            build/MuFlow-unsigned.ipa build/SHA256SUMS

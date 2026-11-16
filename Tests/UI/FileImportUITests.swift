@@ -2,6 +2,21 @@ import XCTest
 
 final class FileImportUITests: XCTestCase {
     @MainActor
+    private func tapVisibleButton(_ identifier: String, in app: XCUIApplication) {
+        let button = app.buttons[identifier]
+        XCTAssertTrue(button.waitForExistence(timeout: 15), app.debugDescription)
+        for _ in 0..<4 {
+            if button.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(button.isHittable, app.debugDescription)
+        let enabled = NSPredicate(format: "enabled == true")
+        expectation(for: enabled, evaluatedWith: button)
+        waitForExpectations(timeout: 10)
+        button.tap()
+    }
+
+    @MainActor
     func testWebDAVLoginAndFolderNavigation() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -20,8 +35,8 @@ final class FileImportUITests: XCTestCase {
         XCTAssertTrue(folder.waitForExistence(timeout: 20), app.debugDescription)
         folder.tap()
         XCTAssertTrue(app.buttons["webdav-item-Episode 01.mkv"].waitForExistence(timeout: 15), app.debugDescription)
-        app.buttons["webdavParent"].tap()
-        XCTAssertTrue(folder.waitForExistence(timeout: 15))
+        tapVisibleButton("webdavParent", in: app)
+        XCTAssertTrue(app.buttons["webdav-item-Series"].waitForExistence(timeout: 15), app.debugDescription)
         app.buttons["closeWebDAV"].tap()
         app.terminate()
         app.launch()
@@ -45,7 +60,7 @@ final class FileImportUITests: XCTestCase {
         func openAndCancel(_ identifier: String) {
             let button = app.buttons[identifier]
             XCTAssertTrue(button.waitForExistence(timeout: 15), app.debugDescription)
-            button.tap()
+            tapVisibleButton(identifier, in: app)
             let cancel = app.buttons["Cancel"].firstMatch
             XCTAssertTrue(cancel.waitForExistence(timeout: 15), "File picker did not appear: \(app.debugDescription)")
             let attachment = XCTAttachment(screenshot: app.screenshot())
@@ -60,6 +75,7 @@ final class FileImportUITests: XCTestCase {
         openAndCancel("openLocalVideo")
         openAndCancel("openLocalVideo")
         openAndCancel("importDanmaku")
+        app.swipeDown()
         app.buttons["openNetworkVideo"].tap()
         XCTAssertTrue(app.buttons["closeNetworkVideo"].waitForExistence(timeout: 10))
         app.buttons["closeNetworkVideo"].tap()

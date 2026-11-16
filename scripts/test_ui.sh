@@ -19,6 +19,8 @@ for runtime in sorted(devices, reverse=True):
 raise SystemExit('No available iPhone simulator')
 PY
 )
+xcrun simctl boot "$simulator_id" 2>/dev/null || true
+xcrun simctl bootstatus "$simulator_id" -b
 xcodebuild test -project MuFlow.xcodeproj -scheme MuFlow -configuration Debug \
   -destination "platform=iOS Simulator,id=$simulator_id" \
   -derivedDataPath build/UITestDerivedData -resultBundlePath build/FileImportUITests.xcresult \

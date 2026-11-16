@@ -13,8 +13,24 @@ class Fixture(BaseHTTPRequestHandler):
         if self.path.startswith('/unavailable/'):
             self.send_error(503)
             return
-        if self.path.startswith('/backup/api/v2/search/anime'):
+        if self.path.startswith('/malformed/'):
+            data = b'<html><body>gateway challenge</body></html>'
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if self.path.startswith('/empty/'):
+            value = {'comments': [], 'count': 0}
+        elif self.path == '/segment-good':
+            value = {'comments': [{'p': '1.5,1,16777215,fixture', 'm': 'surviving segment'}]}
+        elif self.path == '/segment-bad':
+            self.send_error(503)
+            return
+        elif self.path.startswith('/backup/api/v2/search/anime'):
             value = {'animes': [{'animeId': 123, 'animeTitle': 'Synthetic series', 'episodeCount': 1}], 'success': True}
+        elif self.path.startswith('/backup/api/v2/bangumi/123'):
+            value = {'bangumi': {'episodes': [{'episodeId': 123001, 'episodeTitle': 'Episode 1'}]}}
         elif self.path.startswith('/backup/api/v2/comment/123001'):
             value = {'comments': [{'p': '1.5,1,16777215,fixture', 'm': 'synthetic comment'}], 'count': 1}
         else:

@@ -5,15 +5,19 @@ import zlib
 
 struct NativeDanmakuService: Sendable {
     func comments(_ url: URL) async throws -> [DanmakuComment] {
+        try await commentsWithStatus(url).comments
+    }
+
+    func commentsWithStatus(_ url: URL) async throws -> DanmakuLoadResult {
         let host = url.host?.lowercased() ?? ""
         if host == "v.qq.com" { return try await tencent(url) }
         if host == "iqiyi.com" || host.hasSuffix(".iqiyi.com") { return try await iqiyi(url) }
-        if host == "bilibili.com" || host.hasSuffix(".bilibili.com") { return try await bilibili(url) }
+        if host == "bilibili.com" || host.hasSuffix(".bilibili.com") { return .init(comments: try await bilibili(url)) }
         if host == "mgtv.com" || host.hasSuffix(".mgtv.com") { return try await mgtv(url) }
         throw DanmakuError.empty
     }
 
-    private func tencent(_ url: URL) async throws -> [DanmakuComment] {
+    private func tencent(_ url: URL) async throws -> DanmakuLoadResult {
         let identifier = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "vid" }?.value
             ?? url.deletingPathExtension().lastPathComponent
         guard identifier.range(of: "^[A-Za-z0-9]{5,32}$", options: .regularExpression) != nil else { throw DanmakuError.empty }
@@ -24,7 +28,7 @@ struct NativeDanmakuService: Sendable {
             guard name.range(of: "^[A-Za-z0-9/_-]+$", options: .regularExpression) != nil else { return nil }
             return URL(string: "https://dm.video.qq.com/barrage/segment/\(identifier)/\(name)")
         }
-        return try await segments(urls, referer: "https://v.qq.com/", parse: Self.tencentSegment)
+        return try await Self.segments(urls, referer: "https://v.qq.com/", parse: Self.tencentSegment)
     }
 
     static func tencentSegment(_ data: Data) throws -> [DanmakuComment] {
@@ -39,7 +43,7 @@ struct NativeDanmakuService: Sendable {
         }
     }
 
-    private func iqiyi(_ url: URL) async throws -> [DanmakuComment] {
+    private func iqiyi(_ url: URL) async throws -> DanmakuLoadResult {
         guard let identifier = Self.match("v_([A-Za-z0-9]+)", in: url.path) else { throw DanmakuError.empty }
         let decode = try await SiteHTTP.json("https://pcw-api.iq.com/api/decode/" + identifier,
                                             query: ["platformId": "3", "modeCode": "intl", "langCode": "sg"])
@@ -56,7 +60,7 @@ struct NativeDanmakuService: Sendable {
                                      "albumid": Self.scalar(info["albumId"]), "categoryid": Self.scalar(info["channelId"] ?? info["categoryId"]),
                                      "qypid": "01010021010000000000"])
         }
-        return try await segments(urls, referer: url.absoluteString) { data in
+        return try await Self.segments(urls, referer: url.absoluteString) { data in
             try Self.iqiyiXML(Self.inflate(data))
         }
     }
@@ -134,7 +138,7 @@ struct NativeDanmakuService: Sendable {
         return try DanmakuParser.parse(await SiteHTTP.data(target, referer: "https://www.bilibili.com/"))
     }
 
-    private func mgtv(_ url: URL) async throws -> [DanmakuComment] {
+    private func mgtv(_ url: URL) async throws -> DanmakuLoadResult {
         guard let cid = Self.match("/b/([0-9]+)/", in: url.path),
               let vid = Self.match("/b/[0-9]+/([A-Za-z0-9_-]+)", in: url.path) else { throw DanmakuError.empty }
         let response = try await SiteHTTP.json("https://pcweb.api.mgtv.com/video/info", query: ["cid": cid, "vid": vid])
@@ -143,7 +147,7 @@ struct NativeDanmakuService: Sendable {
         let duration = time.split(separator: ":").reduce(0.0) { $0 * 60 + (Double($1) ?? 0) }
         let count = min(400, max(1, Int(ceil(duration / 60))))
         let urls = try (0..<count).map { try SiteHTTP.url("https://galaxy.bz.mgtv.com/rdbarrage", query: ["vid": vid, "cid": cid, "time": String($0 * 60000)]) }
-        return try await segments(urls, referer: "https://www.mgtv.com/") { data in
+        return try await Self.segments(urls, referer: "https://www.mgtv.com/") { data in
             let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
             let rows = (object?["data"] as? [String: Any])?["items"] as? [[String: Any]] ?? []
             return rows.enumerated().compactMap { index, row in
@@ -153,33 +157,51 @@ struct NativeDanmakuService: Sendable {
         }
     }
 
-    private func segments(_ urls: [URL], referer: String,
-                          parse: @escaping @Sendable (Data) throws -> [DanmakuComment]) async throws -> [DanmakuComment] {
+    private enum SegmentOutcome: Sendable {
+        case comments([DanmakuComment]), failed(String)
+    }
+
+    static func segments(_ urls: [URL], referer: String,
+                         parse: @escaping @Sendable (Data) throws -> [DanmakuComment]) async throws -> DanmakuLoadResult {
         guard !urls.isEmpty else { throw DanmakuError.empty }
         var comments: [DanmakuComment] = []
+        var failures: [String] = []
         for start in stride(from: 0, to: min(urls.count, 400), by: 6) {
             try Task.checkCancellation()
             let batch = Array(urls[start..<min(start + 6, urls.count)])
-            let incoming = try await withThrowingTaskGroup(of: [DanmakuComment].self) { group in
+            let incoming = try await withThrowingTaskGroup(of: SegmentOutcome.self) { group in
                 for (index, url) in batch.enumerated() {
                     group.addTask {
                         do {
                             let data = try await SiteHTTP.data(url, referer: referer)
-                            return try parse(data).map { item in
+                            return .comments(try parse(data).map { item in
                                 var item = item; item.id = "\(start + index):" + item.id; return item
-                            }
-                        } catch ServiceError.http(404) { return [] }
+                            })
+                        } catch ServiceError.http(404) { return .comments([]) }
+                        catch {
+                            try Task.checkCancellation()
+                            return .failed(DanmakuFailure.message(error))
+                        }
                     }
                 }
-                var result: [DanmakuComment] = []
-                for try await items in group { result += items }
+                var result: [SegmentOutcome] = []
+                for try await item in group { result.append(item) }
                 return result
             }
-            comments += incoming
+            for outcome in incoming {
+                switch outcome {
+                case .comments(let items): comments += items
+                case .failed(let message): failures.append(message)
+                }
+            }
             if comments.count >= DanmakuParser.maximumComments { break }
         }
-        guard !comments.isEmpty else { throw DanmakuError.empty }
-        return Array(comments.sorted { $0.time < $1.time }.prefix(DanmakuParser.maximumComments))
+        guard !comments.isEmpty else {
+            if let first = failures.first { throw ServiceError.rejected(first) }
+            throw DanmakuError.empty
+        }
+        return .init(comments: Array(comments.sorted { $0.time < $1.time }.prefix(DanmakuParser.maximumComments)),
+                     failedSegments: failures.count)
     }
 
     static func match(_ pattern: String, in value: String) -> String? {

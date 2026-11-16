@@ -1,8 +1,59 @@
 import XCTest
+import DanmakuCore
+import WebDAVCore
 @testable import MuFlow
 
 @MainActor
 final class DanmakuServiceTests: XCTestCase {
+    func testWebDAVCanReturnToRootAfterOpeningChild() async throws {
+        let connection = WebDAVConnection(address: "http://127.0.0.1:18765/dav/",
+                                          username: "fixture-user", password: "fixture-password")
+        let root = try connection.rootURL()
+        let service = WebDAVService(connection: connection)
+        let initial = try await service.list(root)
+        let child = try XCTUnwrap(initial.first)
+        let media = try await service.list(child.url)
+        XCTAssertEqual(media.first?.name, "Episode 01.mkv")
+        let restored = try await service.list(root)
+        XCTAssertEqual(restored.first?.name, "Series")
+    }
+    func testMalformedHTTP200AlsoTriesBackupForSearchEpisodesAndComments() async throws {
+        let service = DanmakuService(server: "http://127.0.0.1:18765/malformed",
+                                     alternateServer: "http://127.0.0.1:18765/backup", fallback: "")
+        let matches = try await service.search("Synthetic series")
+        let anime = try XCTUnwrap(matches.first)
+        let episodes = try await service.episodes(anime)
+        XCTAssertEqual(episodes.first?.episodeId, 123001)
+        let comments = try await service.comments(episode: 123001)
+        XCTAssertEqual(comments.first?.text, "synthetic comment")
+    }
+
+    func testEmptyPrimaryCommentsAlsoTryBackup() async throws {
+        let service = DanmakuService(server: "http://127.0.0.1:18765/empty",
+                                     alternateServer: "http://127.0.0.1:18765/backup", fallback: "")
+        let comments = try await service.comments(episode: 123001)
+        XCTAssertEqual(comments.count, 1)
+    }
+
+    func testSegmentFailurePreservesSuccessfulCommentsAndReportsMissingPart() async throws {
+        let urls = ["segment-bad", "segment-good"].map { URL(string: "http://127.0.0.1:18765/" + $0)! }
+        let result = try await NativeDanmakuService.segments(urls, referer: "") { try DanmakuParser.parse($0) }
+        XCTAssertEqual(result.comments.first?.text, "surviving segment")
+        XCTAssertEqual(result.failedSegments, 1)
+        do {
+            _ = try await NativeDanmakuService.segments([urls[0]], referer: "") { try DanmakuParser.parse($0) }
+            XCTFail("An entirely failed download must not be reported as success")
+        } catch {
+            XCTAssertTrue(DanmakuFailure.message(error).contains("故障"))
+        }
+    }
+
+    func testNetworkErrorsHaveActionableMessages() {
+        XCTAssertTrue(DanmakuFailure.message(URLError(.notConnectedToInternet)).contains("无线数据"))
+        XCTAssertTrue(DanmakuFailure.message(URLError(.cannotFindHost)).contains("DNS"))
+        XCTAssertTrue(DanmakuFailure.message(URLError(.serverCertificateUntrusted)).contains("证书"))
+    }
+
     func testSearchAndCommentsFailOverWhenPrimaryReturns503() async throws {
         let service = DanmakuService(server: "http://127.0.0.1:18765/unavailable",
                                      alternateServer: "http://127.0.0.1:18765/backup", fallback: "")

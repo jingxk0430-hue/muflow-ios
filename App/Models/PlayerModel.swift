@@ -98,14 +98,14 @@ final class PlayerModel {
         retryCommentsAction = { [weak self] in self?.load(episode: episode, anime: anime, append: append) }
         let service = service
         loadComments(title: "\(anime) · \(episode.episodeTitle)", append: append) {
-            try await service.comments(episode: episode.episodeId)
+            .init(comments: try await service.comments(episode: episode.episodeId))
         }
     }
 
     func load(link: String, append: Bool, title: String? = nil) {
         retryCommentsAction = { [weak self] in self?.load(link: link, append: append, title: title) }
         let service = service
-        loadComments(title: title ?? "链接弹幕", append: append) { try await service.comments(link: link) }
+        loadComments(title: title ?? "链接弹幕", append: append) { try await service.commentsWithStatus(link: link) }
     }
 
     func importComments(_ url: URL, append: Bool = false) {
@@ -116,20 +116,21 @@ final class PlayerModel {
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                 guard size <= DanmakuParser.maximumBytes else { throw DanmakuError.tooLarge }
-                return try DanmakuParser.parse(Data(contentsOf: url))
+                return DanmakuLoadResult(comments: try DanmakuParser.parse(Data(contentsOf: url)))
             }.value
         }
     }
 
     private func loadComments(title: String, append: Bool,
-                              operation: @escaping @Sendable () async throws -> [DanmakuComment]) {
+                              operation: @escaping @Sendable () async throws -> DanmakuLoadResult) {
         guard mediaURL != nil else { error = "请先打开一个视频，再为它加载弹幕。"; return }
         commentsTask?.cancel()
         let generation = mediaID
         isLoadingComments = true; error = nil; commentsFailed = false
         commentsTask = Task { [weak self] in
             do {
-                let incoming = try await operation()
+                let result = try await operation()
+                let incoming = result.comments
                 try Task.checkCancellation()
                 guard let self, self.mediaID == generation else { return }
                 guard !incoming.isEmpty else { throw DanmakuError.empty }
@@ -140,6 +141,9 @@ final class PlayerModel {
                 self.comments = Array((append ? self.comments + identified : identified).prefix(DanmakuParser.maximumComments))
                 self.sourceTitle = title; self.commentRevision = UUID()
                 self.status = "已加载 \(self.comments.count) 条弹幕"
+                if result.failedSegments > 0 {
+                    self.status += "；\(result.failedSegments) 个分段未能读取，已保留成功部分，可重新选择此集重试"
+                }
                 if let url = self.cacheURL {
                     do { try DanmakuParser.xml(self.comments).write(to: url, options: .atomic) }
                     catch { self.status += "；本地保存失败，可手动导出" }
@@ -150,7 +154,7 @@ final class PlayerModel {
                 guard !Task.isCancelled, let self, self.mediaID == generation else { return }
                 self.isLoadingComments = false
                 self.commentsFailed = true
-                self.error = (error as? LocalizedError)?.errorDescription ?? "弹幕加载失败，已保留原有弹幕和输入，请重试。"
+                self.error = DanmakuFailure.message(error)
             }
         }
     }

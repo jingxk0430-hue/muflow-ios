@@ -100,11 +100,11 @@ struct DanmakuSearchView: View {
             await withTaskGroup(of: SearchOutcome.self) { group in
                 group.addTask {
                     do { return .anime(try await service.search(query)) }
-                    catch { return .failed("弹弹play搜索暂时不可用") }
+                    catch { return .failed("弹弹play搜索：" + DanmakuFailure.message(error)) }
                 }
                 group.addTask {
                     do { return .films(try await TVSearchService().search(query)) }
-                    catch { return .failed("影视目录暂时不可用") }
+                    catch { return .failed("影视目录：" + DanmakuFailure.message(error)) }
                 }
                 var errors: [String] = []
                 for await outcome in group {
@@ -131,7 +131,7 @@ struct DanmakuSearchView: View {
                 filmEpisodes = found; searching = false
             } catch {
                 guard !Task.isCancelled else { return }
-                self.error = "影视集数未能加载，可返回列表选择其他来源或重试。"; searching = false
+                self.error = "影视集数：" + DanmakuFailure.message(error); searching = false
             }
         }
     }
@@ -147,7 +147,7 @@ struct DanmakuSearchView: View {
                 if found.isEmpty { error = "这个作品暂无可用集数，请选择其他结果。" }
             } catch {
                 if !Task.isCancelled {
-                    self.error = ((error as? LocalizedError)?.errorDescription ?? "集数加载失败，请检查网络。") + " 可返回作品列表后重试。"
+                    self.error = "作品集数：" + DanmakuFailure.message(error) + " 可返回作品列表后重试。"
                     searching = false
                 }
             }

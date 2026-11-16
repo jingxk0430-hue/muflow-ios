@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var model: PlayerModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showingConnectionCheck = false
     var body: some View {
         NavigationStack {
             Form {
@@ -30,6 +31,7 @@ struct SettingsView: View {
                                   text: "\(model.settings.mergeTolerance.formatted(.number.precision(.fractionLength(1)))) 秒")
                 }
                 Section("弹幕服务") {
+                    Button("检查弹幕连接", systemImage: "network") { showingConnectionCheck = true }
                     TextField("主服务地址", text: $model.server).keyboardType(.URL)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("备用弹弹play服务", text: $model.alternateServer).keyboardType(.URL)
@@ -45,6 +47,7 @@ struct SettingsView: View {
                 }
             }.navigationTitle("播放设置").navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+                .sheet(isPresented: $showingConnectionCheck) { DanmakuConnectionView(model: model) }
         }
     }
 
