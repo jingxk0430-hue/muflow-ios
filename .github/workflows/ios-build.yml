@@ -67,7 +67,7 @@ jobs:
           name: FileImportUITests
           path: build/FileImportUITests.xcresult
           retention-days: 3
-      - name: Publish validated unsigned preview
+      - name: Prepare unsigned preview for visual review
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -84,6 +84,6 @@ jobs:
               f'Source: {commit}. Device compilation and automated checks passed: https://github.com/jingxk0430-hue/muflow-ios/actions/runs/{run}\n\n'
               'Unsigned IPA: a valid certificate and registered-device profile are required for installation. No signing credentials are included. Actual phone connectivity and playback still require real-device verification.\n')
           PY
-          gh release create "$tag" --target "$GITHUB_SHA" --prerelease \
+          gh release create "$tag" --target "$GITHUB_SHA" --prerelease --draft \
             --title "MuFlow ${version} iOS preview" --notes-file build/release-notes.txt \
             build/MuFlow-unsigned.ipa build/SHA256SUMS

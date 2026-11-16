@@ -21,7 +21,11 @@ final class FileImportUITests: XCTestCase {
             expectation(for: rotated, evaluatedWith: app)
             waitForExpectations(timeout: 10)
             XCTAssertTrue(preview.isHittable)
-            let attachment = XCTAttachment(screenshot: app.screenshot())
+            // The app frame changes before the rotation has finished compositing.
+            Thread.sleep(forTimeInterval: 2)
+            let screenshot = XCUIScreen.main.screenshot()
+            XCTAssertEqual(screenshot.image.size.width > screenshot.image.size.height, landscape)
+            let attachment = XCTAttachment(screenshot: screenshot)
             attachment.name = name
             attachment.lifetime = .keepAlways
             add(attachment)
