@@ -37,6 +37,29 @@ jobs:
       - name: Test local video picker in an iPhone simulator
         timeout-minutes: 15
         run: bash scripts/test_ui.sh
+      - name: Export actual danmaku style previews
+        run: |
+          xcrun xcresulttool export attachments --path build/FileImportUITests.xcresult --output-path build/test-attachments
+          python3 - <<'PY'
+          import json, shutil
+          from pathlib import Path
+          source = Path('build/test-attachments')
+          target = Path('build/style-previews')
+          target.mkdir()
+          for test in json.loads((source / 'manifest.json').read_text()):
+              for item in test.get('attachments', []):
+                  for orientation in ('portrait', 'landscape'):
+                      if f'danmaku-style-{orientation}' in item.get('suggestedHumanReadableName', ''):
+                          shutil.copyfile(source / item['exportedFileName'], target / f'danmaku_style_{orientation}.png')
+          assert len(list(target.glob('*.png'))) == 2, 'Both actual preview screenshots are required'
+          PY
+      - name: Upload style preview screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: DanmakuStylePreviews
+          path: build/style-previews/*.png
+          retention-days: 3
+          if-no-files-found: error
       - name: Upload file picker UI test evidence
         if: always()
         uses: actions/upload-artifact@v4
