@@ -184,7 +184,7 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 - (void)updateMenu {
     NSMutableArray<UIMenuElement *> *items=[NSMutableArray array];
     UIAction *status=[UIAction actionWithTitle:(self.onlineProgress ? @"正在获取弹幕…" :
-        [NSString stringWithFormat:@"%lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
+        [NSString stringWithFormat:@"扩展 0.1.1 · %lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
                                   (double)self.fontSize,self.delay]) image:nil identifier:nil handler:^(__unused UIAction *a){}];
     status.attributes=UIMenuElementAttributesDisabled;
     [items addObject:status];

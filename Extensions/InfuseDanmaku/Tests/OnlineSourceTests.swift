@@ -29,7 +29,7 @@ private func expect(_ value: @autoclosure () throws -> Bool, _ message: String) 
         try expect(try IFDSourcePolicy.normalize(sources[4]).query == "p=2", "Bilibili multi-part selection")
         try expect(DanmakuSourceLink.isBilibiliShort(try IFDSourcePolicy.normalize(sources[5])), "Bilibili short link")
 
-        let tencent = try NativeDanmakuService.tencentSegment(Data(#"{"barrage_list":[{"content":"腾讯弹幕","time_offset":1250,"content_style":{"color":"#00ff00"}}]}"#.utf8))
+        let tencent = try NativeDanmakuService.tencentSegment(Data(##"{"barrage_list":[{"content":"腾讯弹幕","time_offset":1250,"content_style":{"color":"#00ff00"}}]}"##.utf8))
         try expect(tencent.count == 1 && tencent[0].time == 1.25 && tencent[0].color == 65280, "Tencent timestamp/color")
         let iqiyi = try NativeDanmakuService.iqiyiXML(Data("<i><bulletInfo><contentId>1</contentId><showTime>1.5</showTime><content><![CDATA[爱奇艺弹幕]]></content><color>ffffff</color></bulletInfo></i>".utf8))
         try expect(iqiyi.count == 1 && iqiyi[0].text == "爱奇艺弹幕" && iqiyi[0].time == 1.5, "iQiyi CDATA/time")
