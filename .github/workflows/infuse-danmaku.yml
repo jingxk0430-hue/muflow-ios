@@ -1,0 +1,29 @@
+name: Build standalone danmaku add-on
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/infuse-danmaku-addon']
+    paths: ['Extensions/InfuseDanmaku/**', '.github/workflows/infuse-danmaku.yml']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: Extensions/InfuseDanmaku
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify timeline behavior
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror Tests/timeline_test.cpp -o "$RUNNER_TEMP/timeline-test"
+          "$RUNNER_TEMP/timeline-test"
+      - name: Build iOS dynamic library
+        run: bash scripts/build-ios.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: InfuseDanmaku-arm64-unsigned
+          path: Extensions/InfuseDanmaku/build/InfuseDanmaku.dylib
+          retention-days: 7
+          if-no-files-found: error

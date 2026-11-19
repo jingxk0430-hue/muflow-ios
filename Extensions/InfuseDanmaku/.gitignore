@@ -1,0 +1,7 @@
+build/
+.DS_Store
+*.ipa
+*.p12
+*.mobileprovision
+*.deb
+*.rea-snapshot.json
