@@ -4,6 +4,13 @@
 #import <cmath>
 #import "../Core/Timeline.hpp"
 
+@interface IFDOnlineSourceBridge : NSObject
++ (NSProgress *)loadSourceURL:(NSString *)source completion:(void (^)(NSDictionary *, NSError *))completion;
+@end
+@class IFDSession;
+static NSHashTable<IFDSession *> *IFDSessions;
+static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
+
 // This add-on does not link Infuse or InfusePlus, and does not alter purchases.
 // Candidate classes/selectors come from the v2.6 shipped plugin. They have NOT
 // been validated in Infuse 8.5.1. Every dynamic call checks its ABI first.
@@ -87,13 +94,12 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 }
 @end
 
-// Only the menu button receives touches. Video gestures pass through the text.
+// This view contains only text. The entry point lives in the native gear menu.
 @interface IFDOverlay : UIView
 @end
 @implementation IFDOverlay
 - (UIView *)hitTest:(CGPoint)p withEvent:(UIEvent *)event {
-    UIView *v=[super hitTest:p withEvent:event];
-    return [v isKindOfClass:UIControl.class] ? v : nil;
+    return nil;
 }
 @end
 
@@ -114,7 +120,9 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 }
 @property(nonatomic, weak) UIViewController *controller;
 @property(nonatomic, strong) IFDOverlay *overlay;
-@property(nonatomic, strong) UIButton *button;
+@property(nonatomic, strong) UIMenu *controlsMenu;
+@property(nonatomic, strong) NSProgress *onlineProgress;
+@property NSUInteger loadGeneration;
 @property(nonatomic, strong) CADisplayLink *displayLink;
 @property(nonatomic, strong) NSArray<IFDComment *> *comments;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *,UILabel *> *labels;
@@ -130,6 +138,7 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 - (instancetype)initWithController:(UIViewController *)controller;
 - (void)start;
 - (void)stop;
+- (void)updateMenu;
 @end
 
 @implementation IFDSession
@@ -137,6 +146,9 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
     if ((self=[super init])) {
         _controller=controller; _comments=@[]; _labels=[NSMutableDictionary dictionary];
         _enabled=YES; _fontSize=20; _textOpacity=1; _area=.5;
+        if (!IFDSessions) IFDSessions=[NSHashTable weakObjectsHashTable];
+        [IFDSessions addObject:self];
+        [self updateMenu];
     }
     return self;
 }
@@ -146,19 +158,9 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
     if (!self.overlay) {
         IFDOverlay *v=[[IFDOverlay alloc] initWithFrame:vc.view.bounds];
         v.backgroundColor=UIColor.clearColor; v.clipsToBounds=YES;
+        v.userInteractionEnabled=NO;
         v.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
         self.overlay=v;
-        UIButton *b=[UIButton buttonWithType:UIButtonTypeSystem];
-        [b setImage:[UIImage systemImageNamed:@"text.bubble"] forState:UIControlStateNormal];
-        b.tintColor=UIColor.whiteColor; b.backgroundColor=[UIColor colorWithWhite:0 alpha:.5];
-        b.layer.cornerRadius=22; b.accessibilityLabel=@"弹幕";
-        b.showsMenuAsPrimaryAction=YES; b.translatesAutoresizingMaskIntoConstraints=NO;
-        [v addSubview:b]; self.button=b;
-        [NSLayoutConstraint activateConstraints:@[
-            [b.trailingAnchor constraintEqualToAnchor:v.safeAreaLayoutGuide.trailingAnchor constant:-12],
-            [b.topAnchor constraintEqualToAnchor:v.safeAreaLayoutGuide.topAnchor constant:60],
-            [b.widthAnchor constraintEqualToConstant:44],[b.heightAnchor constraintEqualToConstant:44]]];
-        [self updateMenu];
     }
     if (self.overlay.superview != vc.view) [vc.view addSubview:self.overlay];
     self.overlay.hidden=NO;
@@ -172,7 +174,7 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 - (void)stop {
     [self.displayLink invalidate]; self.displayLink=nil; self.overlay.hidden=YES;
 }
-- (void)dealloc { [_displayLink invalidate]; [_overlay removeFromSuperview]; }
+- (void)dealloc { [_onlineProgress cancel]; [_displayLink invalidate]; [_overlay removeFromSuperview]; }
 - (UIAction *)action:(NSString *)title block:(void (^)(IFDSession *))block {
     __weak IFDSession *weak=self;
     return [UIAction actionWithTitle:title image:nil identifier:nil handler:^(__unused UIAction *a) {
@@ -181,6 +183,13 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 }
 - (void)updateMenu {
     NSMutableArray<UIMenuElement *> *items=[NSMutableArray array];
+    UIAction *status=[UIAction actionWithTitle:(self.onlineProgress ? @"正在获取弹幕…" :
+        [NSString stringWithFormat:@"%lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
+                                  (double)self.fontSize,self.delay]) image:nil identifier:nil handler:^(__unused UIAction *a){}];
+    status.attributes=UIMenuElementAttributesDisabled;
+    [items addObject:status];
+    [items addObject:[self action:@"从视频网页获取弹幕" block:^(IFDSession *s){ [s enterSourceURL]; }]];
+    if (self.onlineProgress) [items addObject:[self action:@"取消获取弹幕" block:^(IFDSession *s){ [s cancelOnline]; }]];
     [items addObject:[self action:@"导入 XML 弹幕" block:^(IFDSession *s){ [s importXML]; }]];
     [items addObject:[self action:(self.enabled?@"关闭弹幕":@"开启弹幕") block:^(IFDSession *s){
         s.enabled=!s.enabled; [s clearLabels]; [s updateMenu];
@@ -194,9 +203,8 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
     [items addObject:[self action:@"恢复默认样式和时间" block:^(IFDSession *s){
         s.fontSize=20; s.area=.5; s.textOpacity=1; s.delay=0; [s rebuild];
     }]];
-    [items addObject:[self action:@"清除本次弹幕" block:^(IFDSession *s){ s.comments=@[]; [s rebuild]; }]];
-    self.button.menu=[UIMenu menuWithTitle:[NSString stringWithFormat:@"%lu 条 · %g 号 · 延迟 %+.1fs",
-        (unsigned long)self.comments.count,(double)self.fontSize,self.delay] children:items];
+    [items addObject:[self action:@"清除本次弹幕" block:^(IFDSession *s){ [s cancelOnline]; s.comments=@[]; [s rebuild]; }]];
+    self.controlsMenu=[UIMenu menuWithTitle:@"弹幕" children:items];
 }
 - (void)clearLabels {
     for (UILabel *l in self.labels.allValues) [l removeFromSuperview];
@@ -248,7 +256,7 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
             label.layer.contentsScale=scale; label.layer.shouldRasterize=NO;
             label.layer.shadowColor=UIColor.blackColor.CGColor;
             label.layer.shadowOpacity=.9; label.layer.shadowRadius=1; label.layer.shadowOffset=CGSizeMake(0,.5);
-            label.alpha=self.textOpacity; [self.overlay insertSubview:label belowSubview:self.button];
+            label.alpha=self.textOpacity; [self.overlay addSubview:label];
             self.labels[key]=label;
         }
         CGFloat y=base+p.lane*row;
@@ -270,10 +278,56 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 - (void)importXML {
     UIViewController *vc=self.controller;
     if (!vc || vc.presentedViewController || self.importing) return;
+    [self cancelOnline];
     UIDocumentPickerViewController *picker=[[UIDocumentPickerViewController alloc]
         initForOpeningContentTypes:@[UTTypeXML,UTTypePlainText,UTTypeData] asCopy:NO];
     picker.delegate=self; picker.allowsMultipleSelection=NO;
     [vc presentViewController:picker animated:YES completion:nil];
+}
+- (void)cancelOnline {
+    self.loadGeneration++; [self.onlineProgress cancel]; self.onlineProgress=nil; [self updateMenu];
+}
+- (void)enterSourceURL {
+    UIViewController *vc=self.controller;
+    if (!vc || vc.presentedViewController) return;
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"从视频网页获取弹幕"
+        message:@"粘贴腾讯、爱奇艺、优酷或 Bilibili 的单集网页链接。这里只获取弹幕，视频继续由 Infuse 播放。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field){
+        field.placeholder=@"https://…"; field.keyboardType=UIKeyboardTypeURL;
+        field.autocapitalizationType=UITextAutocapitalizationTypeNone;
+        field.autocorrectionType=UITextAutocorrectionTypeNo;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    __weak IFDSession *weak=self;
+    __weak UIAlertController *weakAlert=alert;
+    [alert addAction:[UIAlertAction actionWithTitle:@"获取弹幕" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *a){
+        [weak loadSourceURL:weakAlert.textFields.firstObject.text ?: @""];
+    }]];
+    [vc presentViewController:alert animated:YES completion:nil];
+}
+- (void)loadSourceURL:(NSString *)source {
+    [self cancelOnline]; NSUInteger generation=self.loadGeneration;
+    __weak IFDSession *weak=self;
+    self.onlineProgress=[IFDOnlineSourceBridge loadSourceURL:source completion:^(NSDictionary *result, NSError *error){
+        IFDSession *s=weak; if (!s || generation!=s.loadGeneration) return;
+        s.onlineProgress=nil; [s updateMenu];
+        if (error) { if (error.code!=-999) [s message:error.localizedDescription]; return; }
+        NSMutableArray<IFDComment *> *comments=[NSMutableArray array];
+        for (NSDictionary *row in result[@"comments"]) {
+            IFDComment *c=[IFDComment new]; c.time=[row[@"time"] doubleValue];
+            c.mode=[row[@"mode"] integerValue]; c.text=row[@"text"];
+            unsigned int rgb=[row[@"color"] unsignedIntValue]&0xffffff;
+            c.color=[UIColor colorWithRed:((rgb>>16)&255)/255.0 green:((rgb>>8)&255)/255.0 blue:(rgb&255)/255.0 alpha:1];
+            if (c.text.length && std::isfinite(c.time) && c.time>=0) [comments addObject:c];
+        }
+        if (!comments.count) { [s message:@"这条链接没有返回可显示的弹幕。请确认是具体一集的播放页。 "]; return; }
+        s.comments=comments; s.enabled=YES; [s rebuild];
+        NSInteger failed=[result[@"failedSegments"] integerValue];
+        NSString *partial=failed>0?[NSString stringWithFormat:@" 有 %ld 个片段未能获取，可稍后重试。",(long)failed]:@"";
+        [s message:[NSString stringWithFormat:@"已加载 %lu 条弹幕。%@",(unsigned long)comments.count,partial]];
+    }];
+    [self updateMenu];
 }
 - (void)documentPicker:(UIDocumentPickerViewController *)p didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     NSURL *url=urls.firstObject; if (!url || self.importing) return;
@@ -319,6 +373,41 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 @end
 
 static const void *IFDSessionKey=&IFDSessionKey;
+static UIMenu *IFDMenuForButton(UIButton *button,UIMenu *original) {
+    if (![original isKindOfClass:UIMenu.class]) return original;
+    NSString *label=button.accessibilityLabel;
+    NSString *settings=[NSBundle.mainBundle localizedStringForKey:@"pcVOSettings" value:@"" table:nil];
+    if (!label.length || ![label isEqualToString:settings]) return original;
+    IFDSession *session=nil;
+    for (IFDSession *candidate in IFDSessions.allObjects) {
+        UIViewController *vc=candidate.controller;
+        if (vc.isViewLoaded && [button isDescendantOfView:vc.view]) { session=candidate; break; }
+    }
+    if (!session) return original;
+    for (UIMenuElement *child in original.children)
+        if ([child isKindOfClass:UIMenu.class] && [((UIMenu *)child).identifier isEqualToString:IFDMenuIdentifier]) return original;
+    __weak IFDSession *weak=session;
+    UIDeferredMenuElement *dynamic=[UIDeferredMenuElement elementWithUncachedProvider:^(void (^complete)(NSArray<UIMenuElement *> *)){
+        IFDSession *s=weak; complete(s ? s.controlsMenu.children : @[]);
+    }];
+    UIMenu *group=[UIMenu menuWithTitle:@"弹幕" image:[UIImage systemImageNamed:@"text.bubble"]
+        identifier:IFDMenuIdentifier options:0 children:@[dynamic]];
+    return [original menuByReplacingChildren:[original.children arrayByAddingObject:group]];
+}
+static void IFDInstallMenuHooks(void) {
+    static BOOL installed=NO; if (installed) return; installed=YES;
+    Method getter=class_getInstanceMethod(UIButton.class,@selector(menu));
+    IMP originalGet=method_getImplementation(getter);
+    method_setImplementation(getter,imp_implementationWithBlock(^UIMenu *(UIButton *button){
+        UIMenu *menu=((UIMenu *(*)(id,SEL))originalGet)(button,@selector(menu));
+        return IFDMenuForButton(button,menu);
+    }));
+    Method setter=class_getInstanceMethod(UIButton.class,@selector(setMenu:));
+    IMP originalSet=method_getImplementation(setter);
+    method_setImplementation(setter,imp_implementationWithBlock(^(UIButton *button,UIMenu *menu){
+        ((void(*)(id,SEL,UIMenu *))originalSet)(button,@selector(setMenu:),IFDMenuForButton(button,menu));
+    }));
+}
 static void IFDInstallClass(Class cls) {
     static NSMutableSet<NSString *> *installed;
     if (!installed) installed=[NSMutableSet set];
@@ -348,6 +437,7 @@ static void IFDInstallClass(Class cls) {
     [installed addObject:name];
 }
 static void IFDInstall(void) {
+    IFDInstallMenuHooks();
     for (NSString *name in @[@"FCVideoViewController",@"_TtC6infuse21FCVideoViewController"])
         IFDInstallClass(NSClassFromString(name));
 }
