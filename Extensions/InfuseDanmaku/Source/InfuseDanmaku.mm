@@ -9,6 +9,8 @@
 #import "TextBitmap.hpp"
 #import "EffectModel.hpp"
 #import "EffectAnimation.hpp"
+#import "BASScene.hpp"
+#import "BiliMaskPipeline.hpp"
 
 @interface IFDOnlineSourceBridge : NSObject
 + (NSProgress *)loadSourceURL:(NSString *)source completion:(void (^)(NSDictionary *, NSError *))completion;
@@ -19,6 +21,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 
 @interface IFDComment : NSObject
 @property(nonatomic,strong) IFDAdvancedText *advanced;
+@property(nonatomic,strong) IFDBASDocument *bas;
 @property(nonatomic,strong) IFDTextStyle *style;
 @property CGFloat textSize;
 @property double time;
@@ -52,7 +55,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     double seconds = 0; NSScanner *scanner=[NSScanner scannerWithString:p[0]];
     if (![scanner scanDouble:&seconds] || !scanner.isAtEnd || !std::isfinite(seconds) || seconds<0) return;
     NSInteger mode = [p[1] integerValue];
-    if (!(mode==1 || mode==2 || mode==3 || mode==4 || mode==5 || mode==7)) {self.unsupported++;return;}
+    if (!(mode==1 || mode==2 || mode==3 || mode==4 || mode==5 || mode==7 || mode==9)) {self.unsupported++;return;}
     unsigned int rgb = (unsigned int)[p[3] longLongValue] & 0xffffff;
     IFDComment *c=[IFDComment new]; c.time=seconds; c.mode=mode; c.textSize=[p[2] doubleValue];
     c.style=[IFDTextStyle parse:@{@"animation":attrs[@"ifd-effect"]?:@"0",
@@ -63,7 +66,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     self.current=c; self.content=[NSMutableString string];
 }
 - (void)parser:(NSXMLParser *)p foundCharacters:(NSString *)s {
-    NSUInteger limit=self.current.mode==7?16384:300;
+    NSUInteger limit=self.current.mode==9?131073:(self.current.mode==7?16384:300);
     if (self.current && self.content.length < limit) {
         [self.content appendString:[s substringToIndex:MIN(s.length,limit-self.content.length)]];
     }
@@ -78,6 +81,10 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     if(self.current.mode==7) {
         self.current.advanced=[IFDAdvancedText parse:self.content fontSize:self.current.textSize];
         self.current.text=self.current.advanced.text;if(!self.current.advanced)self.unsupported++;
+    }
+    if(self.current.mode==9) {
+        self.current.bas=[IFDBASDocument parse:self.content];
+        self.current.text=self.current.bas.error?nil:@"BAS";if(self.current.bas.error)self.unsupported++;
     }
     if (self.current.text.length) [self.comments addObject:self.current];
     self.current=nil; self.content=nil;
@@ -192,7 +199,8 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 
 @interface IFDSession : NSObject <UIDocumentPickerDelegate> {
     ifd::Timeline _timeline;
-    ifd::EffectTimeline _effects;
+    ifd::EffectTimeline _effects, _scenes;
+    std::vector<size_t> _activeScenes;
     std::vector<size_t> _activeEffects;
     ifd::MediaClock _clock;
     ifd::PlayerGetters _getters;
@@ -207,6 +215,19 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 @property NSUInteger loadGeneration;
 @property(nonatomic, strong) CADisplayLink *displayLink;
 @property(nonatomic, strong) NSArray<IFDComment *> *comments;
+@property(nonatomic,strong) NSCache<NSNumber *,IFDBASPrepared *> *sceneCache;
+@property(nonatomic,strong) NSMutableDictionary<NSNumber *,IFDBASLayer *> *sceneLayers;
+@property(nonatomic,strong) NSMutableSet<NSNumber *> *pendingScenes;
+@property(nonatomic,strong) NSMutableSet<NSNumber *> *failedScenes;
+@property(nonatomic,copy) NSDictionary *sourceReport;
+@property(nonatomic,strong) IFDBiliMask *biliMask;
+@property(nonatomic,strong) IFDBiliMaskImage *maskImage;
+@property(nonatomic,strong) CALayer *maskLayer;
+@property(nonatomic,copy) NSString *maskError;
+@property double maskBucket;
+@property double maskAspect;
+@property BOOL masksEnabled;
+@property NSUInteger maskGeneration;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *,IFDRenderLabel *> *labels;
 @property(nonatomic, strong) NSMutableArray<IFDRenderLabel *> *recycledLabels;
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *activeKeys;
@@ -236,12 +257,19 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 - (void)cancelTextPreparation;
 - (void)prepareImage:(IFDComment *)comment;
 - (void)prewarmAt:(double)time;
+- (void)prepareScene:(IFDComment *)comment;
+- (void)resetMask;
+- (void)updateMaskAt:(double)time jumped:(BOOL)jumped;
+- (void)showSourceReport;
 @end
 
 @implementation IFDSession
 - (instancetype)initWithController:(UIViewController *)controller {
     if ((self=[super init])) {
         _controller=controller; _comments=@[]; _labels=[NSMutableDictionary dictionary];
+        _sceneCache=[NSCache new];_sceneCache.countLimit=4;_sceneCache.totalCostLimit=32*1024*1024;
+        _sceneLayers=[NSMutableDictionary new];_pendingScenes=[NSMutableSet new];_failedScenes=[NSMutableSet new];
+        _maskBucket=NAN;_maskAspect=16./9;_masksEnabled=YES;
         _recycledLabels=[NSMutableArray arrayWithCapacity:36];
         _activeKeys=[NSMutableSet setWithCapacity:36]; _visible.reserve(36);
         _textImages=[NSCache new]; _textImages.countLimit=128; _textImages.totalCostLimit=12*1024*1024;
@@ -291,13 +319,18 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 - (void)updateMenu {
     NSMutableArray<UIMenuElement *> *items=[NSMutableArray array];
     UIAction *status=[UIAction actionWithTitle:(self.onlineProgress ? @"正在获取弹幕…" :
-        [NSString stringWithFormat:@"扩展 0.2.0 · %lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
+        [NSString stringWithFormat:@"扩展 0.3.0 · %lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
                                   (double)self.fontSize,self.delay]) image:nil identifier:nil handler:^(__unused UIAction *a){}];
     status.attributes=UIMenuElementAttributesDisabled;
     [items addObject:status];
+    [items addObject:[self action:@"查看加载结果与支持范围" block:^(IFDSession *s){[s showSourceReport];}]];
+    if(self.biliMask){
+        [items addObject:[self action:(self.masksEnabled?@"关闭人物遮挡":@"开启人物遮挡") block:^(IFDSession *s){s.masksEnabled=!s.masksEnabled;[s resetMask];[s updateMenu];}]];
+        [items addObject:[self action:[NSString stringWithFormat:@"遮挡画幅 %.2f:1（点击切换）",self.maskAspect] block:^(IFDSession *s){s.maskAspect=s.maskAspect<1.5?16./9:s.maskAspect<2?2.35:4./3;[s resetMask];[s updateMenu];}]];
+    }
     [items addObject:[self action:@"从视频网页获取弹幕" block:^(IFDSession *s){ [s enterSourceURL]; }]];
     if (self.onlineProgress) [items addObject:[self action:@"取消获取弹幕" block:^(IFDSession *s){ [s cancelOnline]; }]];
-    [items addObject:[self action:@"导入 XML 弹幕" block:^(IFDSession *s){ [s importXML]; }]];
+    [items addObject:[self action:@"导入 XML / BAS 弹幕" block:^(IFDSession *s){ [s importXML]; }]];
     [items addObject:[self action:(self.enabled?@"关闭弹幕":@"开启弹幕") block:^(IFDSession *s){
         s.enabled=!s.enabled; s->_clock.reset(); [s cancelTextPreparation]; [s clearLabels]; [s updateMenu];
     }]];
@@ -311,10 +344,17 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     [items addObject:[self action:@"恢复默认样式和时间" block:^(IFDSession *s){
         s.effectsEnabled=YES;s.fontSize=20; s.area=.5; s.textOpacity=1; s.delay=0; [s rebuild];
     }]];
-    [items addObject:[self action:@"清除本次弹幕" block:^(IFDSession *s){ [s cancelOnline]; s.comments=@[]; [s rebuild]; }]];
+    [items addObject:[self action:@"清除本次弹幕" block:^(IFDSession *s){ [s cancelOnline]; s.comments=@[];s.sourceReport=nil;s.biliMask=nil;[s resetMask]; [s rebuild]; }]];
     self.controlsMenu=[UIMenu menuWithTitle:@"弹幕" children:items];
 }
+- (void)resetMask {
+    self.maskGeneration++;self.maskBucket=NAN;self.maskImage=nil;self.overlay.layer.mask=nil;
+    [self.biliMask.queue cancelAllOperations];_lastDrawnTime=NAN;
+}
 - (void)clearLabels {
+    [self resetMask];
+    for(IFDBASLayer *scene in self.sceneLayers.allValues)[scene.root removeFromSuperlayer];
+    [self.sceneLayers removeAllObjects];
     for (IFDRenderLabel *l in self.labels.allValues) [self recycleLabel:l];
     [self.labels removeAllObjects];
     _lastDrawnTime=NAN;
@@ -332,7 +372,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     BOOL resetImages=!CGSizeEqualToSize(self.preparedSize,self.overlay.bounds.size) || self.measuredEffects!=self.effectsEnabled || self.measuredFontSize!=self.fontSize || self.preparedComments!=self.comments ||
         self.preparedScale!=(self.overlay.window.screen.scale ?: UIScreen.mainScreen.scale);
     [self cancelTextPreparation];
-    if (resetImages) [self.textImages removeAllObjects];
+    if (resetImages) {[self.textImages removeAllObjects];[self.sceneCache removeAllObjects];[self.failedScenes removeAllObjects];}
     self.preparedComments=self.comments;self.measuredEffects=self.effectsEnabled;
     [self clearLabels];
     CGSize size=self.overlay.bounds.size; self.preparedSize=size;
@@ -347,10 +387,11 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     BOOL measure=self.measuredFontSize!=self.fontSize;
     self.measuredFontSize=self.fontSize;
     std::vector<ifd::Comment> comments;
-    comments.reserve(self.comments.count);std::vector<ifd::EffectEvent> effects;
+    comments.reserve(self.comments.count);std::vector<ifd::EffectEvent> effects,scenes;
     for (NSUInteger i=0;i<self.comments.count;++i) {
         IFDComment *c=self.comments[i];
         c.renderKey=@(i);
+        if(c.bas){if(self.effectsEnabled)scenes.push_back({c.time,c.bas->scene.duration,i});continue;}
         c.textSize=c.advanced?std::clamp(c.advanced.fontSize*MIN(size.width/672.,size.height/438.),8.0,96.0):self.fontSize;
         UIFont *itemFont=[UIFont systemFontOfSize:c.textSize weight:UIFontWeightRegular];
         if (measure || c.width<=0 || c.advanced) c.width=ceil([c.text sizeWithAttributes:@{NSFontAttributeName:itemFont}].width)+4;
@@ -361,13 +402,68 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     }
     _timeline.prepare(std::move(comments),size.width,lanes,90,36);
     _effects.prepare(std::move(effects));
+    _scenes.prepare(std::move(scenes),120,2);
     [self updateMenu];
 }
 - (void)cancelTextPreparation {
     self.renderGeneration++; [self.textQueue cancelAllOperations];
-    [self.pendingImages removeAllObjects]; _nextPrewarm=0;
+    [self.pendingImages removeAllObjects];[self.pendingScenes removeAllObjects]; _nextPrewarm=0;
+}
+- (void)prepareScene:(IFDComment *)comment {
+    NSNumber *key=comment.renderKey;
+    if(!comment.bas||[self.sceneCache objectForKey:key]||[self.failedScenes containsObject:key]||
+       [self.pendingScenes containsObject:key]||self.pendingScenes.count>=2)return;
+    [self.pendingScenes addObject:key];NSUInteger generation=self.renderGeneration;
+    CGSize size=self.preparedSize;double scale=self.preparedScale;
+    __weak IFDSession *weak=self;
+    [self.textQueue addOperationWithBlock:^{@autoreleasepool{
+        IFDBASPrepared *prepared=[IFDBASPrepared prepare:comment.bas size:size scale:scale];
+        dispatch_async(dispatch_get_main_queue(),^{
+            IFDSession *s=weak;if(!s||s.renderGeneration!=generation)return;
+            [s.pendingScenes removeObject:key];
+            if(prepared.error)[s.failedScenes addObject:key];
+            else [s.sceneCache setObject:prepared forKey:key cost:prepared.bytes+prepared.nodes.count*65536];
+            // A paused host has no advancing tick. Wake composition after the
+            // worker supplies the scene, without changing the host clock.
+            s->_lastDrawnTime=NAN;
+        });
+    }}];
+}
+- (void)updateMaskAt:(double)time jumped:(BOOL)jumped {
+    if(!self.biliMask||!self.masksEnabled||!self.effectsEnabled){self.overlay.layer.mask=nil;return;}
+    if(jumped)[self resetMask];
+    double interval=floor(1000/self.biliMask.fps),ms=time*1000;
+    if(self.maskImage&&self.maskImage.timeMs>=ms+interval&&self.maskImage.timeMs<ms+3*interval){
+        if(!self.maskLayer)self.maskLayer=[CALayer layer];self.maskLayer.frame=self.overlay.bounds;
+        self.maskLayer.contents=(__bridge id)self.maskImage.image;self.overlay.layer.mask=self.maskLayer;
+    }else self.overlay.layer.mask=nil;
+    double bucket=floor(time*self.biliMask.fps);
+    if(bucket==self.maskBucket)return;self.maskBucket=bucket;
+    CGSize size=self.overlay.bounds.size;
+    double width=MIN(size.width,size.height*self.maskAspect),height=width/self.maskAspect;
+    CGRect rect=CGRectMake((size.width-width)/2,(size.height-height)/2,width,height);
+    NSUInteger generation=self.maskGeneration;__weak IFDSession *weak=self;
+    [self.biliMask prepareAt:time canvas:size contentRect:rect completion:^(IFDBiliMaskImage *image,NSString *error){
+        IFDSession *s=weak;if(!s||s.maskGeneration!=generation)return;
+        s.maskImage=image;s.maskError=error;s->_lastDrawnTime=NAN;
+    }];
+}
+- (void)showSourceReport {
+    NSUInteger bas=0,advanced=0;for(IFDComment *c in self.comments){if(c.bas)++bas;else if(c.advanced)++advanced;}
+    NSMutableString *report=[NSMutableString stringWithFormat:@"普通/高级弹幕 %lu 条，高级定位 %lu 条，BAS 场景 %lu 个。\n本地 BAS：文字、矢量路径、父子层级、串并行时间线、颜色与旋转缩放；按钮仅显示，暂不响应跳转。\n不支持模板、apply、脚本和动态描边宽度。\n",(unsigned long)self.comments.count,(unsigned long)advanced,(unsigned long)bas];
+    if(self.failedScenes.count)[report appendFormat:@"%lu 个 BAS 场景因超限或未支持属性跳过。\n",(unsigned long)self.failedScenes.count];
+    NSArray *activities=self.sourceReport[@"activities"];
+    if(activities.count)[report appendFormat:@"收到 %lu 个活动配置；活动着色器（含黑洞/粒子）尚未接入，不以普通动画替代。\n",(unsigned long)activities.count];
+    NSDictionary *mask=self.sourceReport[@"mask"];
+    if(self.biliMask)[report appendFormat:@"人物遮挡：已下载蒙版，按 %.2f:1 画幅映射（齿轮菜单可切换）。%@\n",self.maskAspect,self.maskError?:@"仅受支持的 SVG 帧可显示；尚未核实宿主的实际视频画幅。"];
+    else if(mask)[report appendFormat:@"人物遮挡来源状态：%@。\n",mask[@"status"]?:@"未提供"];
+    NSDictionary *acquisition=self.sourceReport[@"acquisition"];
+    if([acquisition[@"status"] isEqual:@"partial"])[report appendString:@"本次仅获取部分数据；匿名接口受限或某些资源缺失。\n"];
+    for(NSDictionary *issue in acquisition[@"issues"])[report appendFormat:@"%@：%@\n",issue[@"stage"]?:@"来源",issue[@"status"]?:@"未知"];
+    [self message:report];
 }
 - (void)prepareImage:(IFDComment *)comment {
+    if(comment.bas)return;
     NSNumber *key=comment.renderKey;
     if (!key || [self.textImages objectForKey:key] || [self.pendingImages containsObject:key] ||
         self.pendingImages.count>=72) return;
@@ -415,6 +511,9 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     }];
 }
 - (void)prewarmAt:(double)time {
+    const auto &basEvents=_scenes.entries();
+    auto b=std::lower_bound(basEvents.begin(),basEvents.end(),time,[](const ifd::EffectEvent &e,double t){return e.time<t;});
+    for(NSUInteger n=0;b!=basEvents.end()&&b->time<=time+2&&n<2;++b,++n)[self prepareScene:self.comments[b->key]];
     const auto &placements=_timeline.placements();
     auto p=std::lower_bound(placements.begin(),placements.end(),time,
         [](const ifd::Placement &entry,double t){ return entry.comment.time<t; });
@@ -443,7 +542,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     double time=0;
     self.clockAvailable=_getters.time.read(player,time);
     if (!self.clockAvailable) {
-        _clock.reset(); if (self.labels.count) [self clearLabels]; return;
+        _clock.reset(); if (self.labels.count||self.sceneLayers.count||self.overlay.layer.mask) [self clearLabels]; return;
     }
     double paused=0, rate=0;
     bool hasPause=_getters.paused.read(player,paused), hasRate=_getters.rate.read(player,rate);
@@ -498,6 +597,14 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         ifd::placeLayer(label.layer,position,p.mode==ifd::Mode::scrolling?renderRate:0,wall,jumped,label->motion);
         [label driveStyleAt:time-c.time rate:renderRate wall:wall force:jumped];
     }
+    _scenes.at(time,_activeScenes);
+    NSMutableSet *sceneKeys=[NSMutableSet new];
+    for(size_t index:_activeScenes){IFDComment *c=self.comments[index];NSNumber *key=c.renderKey;[sceneKeys addObject:key];IFDBASLayer *scene=self.sceneLayers[key];
+        if(!scene){IFDBASPrepared *prepared=[self.sceneCache objectForKey:key];if(prepared){scene=[[IFDBASLayer alloc] initWithPrepared:prepared];self.sceneLayers[key]=scene;[self.overlay.layer addSublayer:scene.root];}else [self prepareScene:c];}
+        scene.root.opacity=self.textOpacity;[scene driveAt:time-c.time rate:renderRate wall:_lastEffectWall force:jumped];
+    }
+    for(NSNumber *key in self.sceneLayers.allKeys)if(![sceneKeys containsObject:key]){[self.sceneLayers[key].root removeFromSuperlayer];[self.sceneLayers removeObjectForKey:key];}
+    [self updateMaskAt:time jumped:jumped];
     _effects.at(time,_activeEffects);
     for(size_t index:_activeEffects) {
         IFDComment *c=self.comments[index];NSNumber *key=c.renderKey;[active addObject:key];
@@ -569,21 +676,32 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         IFDSession *s=weak; if (!s || generation!=s.loadGeneration) return;
         s.onlineProgress=nil; [s updateMenu];
         if (error) { if (error.code!=-999) [s message:error.localizedDescription]; return; }
-        NSMutableArray<IFDComment *> *comments=[NSMutableArray array];
-        for (NSDictionary *row in result[@"comments"]) {
-            IFDComment *c=[IFDComment new]; c.time=[row[@"time"] doubleValue];
-            c.mode=[row[@"mode"] integerValue]; c.text=row[@"text"];
-            c.style=[IFDTextStyle parse:row[@"style"]];
-            if(c.mode==7){c.advanced=[IFDAdvancedText parse:c.text fontSize:[row[@"fontSize"] doubleValue]];c.text=c.advanced.text;}
-            unsigned int rgb=[row[@"color"] unsignedIntValue]&0xffffff;
-            c.color=[UIColor colorWithRed:((rgb>>16)&255)/255.0 green:((rgb>>8)&255)/255.0 blue:(rgb&255)/255.0 alpha:1];
-            if (c.text.length && std::isfinite(c.time) && c.time>=0) [comments addObject:c];
-        }
-        if (!comments.count) { [s message:@"这条链接没有返回可显示的弹幕。请确认是具体一集的播放页。 "]; return; }
-        s.comments=comments; s.enabled=YES; [s rebuild];
-        NSInteger failed=[result[@"failedSegments"] integerValue];
-        NSString *partial=failed>0?[NSString stringWithFormat:@" 有 %ld 个片段未能获取，可稍后重试。",(long)failed]:@"";
-        [s message:[NSString stringWithFormat:@"已加载 %lu 条弹幕。%@",(unsigned long)comments.count,partial]];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+            NSMutableArray<IFDComment *> *comments=[NSMutableArray array];NSUInteger skipped=0;
+            for (NSDictionary *row in result[@"comments"]) {
+                if(comments.count>=30000)break;
+                if(![row isKindOfClass:NSDictionary.class]||![row[@"text"] isKindOfClass:NSString.class]){++skipped;continue;}
+                IFDComment *c=[IFDComment new];c.time=[row[@"time"] doubleValue];c.mode=[row[@"mode"] integerValue];c.text=row[@"text"];
+                c.style=[IFDTextStyle parse:row[@"style"]];
+                if(c.mode==7){c.advanced=[IFDAdvancedText parse:c.text fontSize:[row[@"fontSize"] doubleValue]];c.text=c.advanced.text;}
+                else if(c.mode==9){c.bas=[IFDBASDocument parse:c.text];c.text=c.bas.error?nil:@"BAS";}
+                else if(c.mode>=1&&c.mode<=5)c.text=[c.text substringToIndex:MIN(c.text.length,300)];
+                else c.text=nil;
+                unsigned int rgb=[row[@"color"] unsignedIntValue]&0xffffff;
+                c.color=[UIColor colorWithRed:((rgb>>16)&255)/255.0 green:((rgb>>8)&255)/255.0 blue:(rgb&255)/255.0 alpha:1];
+                if(c.text.length&&std::isfinite(c.time)&&c.time>=0)[comments addObject:c];else ++skipped;
+            }
+            NSDictionary *mask=result[@"mask"];NSData *maskData=mask[@"fileData"];
+            IFDBiliMask *maskSource=[maskData isKindOfClass:NSData.class]?[[IFDBiliMask alloc] initWithData:maskData fps:[mask[@"fps"] doubleValue]]:nil;
+            dispatch_async(dispatch_get_main_queue(),^{
+                IFDSession *current=weak;if(!current||generation!=current.loadGeneration)return;
+                if(!comments.count){[current message:@"来源未返回可显示的弹幕；可能没有数据或包含尚未支持的特效。现有弹幕保留。"];return;}
+                current.comments=comments;current.sourceReport=result;current.biliMask=maskSource;current.maskError=nil;current.enabled=YES;[current rebuild];
+                NSDictionary *acquisition=result[@"acquisition"];
+                BOOL partial=[result[@"failedSegments"] integerValue]>0||[result[@"truncated"] boolValue]||[acquisition[@"status"] isEqual:@"partial"];
+                [current message:[NSString stringWithFormat:@"已载入 %lu 条弹幕%@。%@ 可在齿轮菜单查看加载结果。",(unsigned long)comments.count,partial?@"（部分数据未获取）":@"",skipped?[NSString stringWithFormat:@" 跳过 %lu 条暂不支持或无效数据。",(unsigned long)skipped]:@""]];
+            });
+        });
     }];
     [self updateMenu];
 }
@@ -606,12 +724,16 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         if (coordinationError || readError || !data) failure=@"无法读取文件，请下载到“文件”后重新选择。";
         else if (data.length>8*1024*1024) failure=@"弹幕文件超过 8 MB，请先精简后导入。";
         NSString *xml=failure?nil:[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        if (!failure && !xml) failure=@"请使用 UTF-8 编码的 XML 弹幕文件。";
+        if (!failure && !xml) failure=@"请使用 UTF-8 编码的 XML / BAS 弹幕文件。";
         if (!failure && ([xml rangeOfString:@"<!DOCTYPE" options:NSCaseInsensitiveSearch].location!=NSNotFound ||
                          [xml rangeOfString:@"<!ENTITY" options:NSCaseInsensitiveSearch].location!=NSNotFound))
             failure=@"该 XML 含有不支持的实体声明。";
         IFDXMLReader *reader=[IFDXMLReader new];
-        if (!failure) {
+        if(!failure&&[url.pathExtension.lowercaseString isEqual:@"bas"]){
+            IFDBASDocument *document=[IFDBASDocument parse:xml];
+            if(document.error)failure=[@"BAS 解析失败：" stringByAppendingString:document.error];
+            else{IFDComment *comment=[IFDComment new];comment.bas=document;comment.mode=9;comment.text=@"BAS";comment.time=0;[reader.comments addObject:comment];}
+        }else if (!failure) {
             NSXMLParser *parser=[[NSXMLParser alloc] initWithData:data];
             parser.shouldResolveExternalEntities=NO; parser.delegate=reader;
             BOOL ok=[parser parse];
@@ -621,7 +743,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         dispatch_async(dispatch_get_main_queue(),^{
             IFDSession *s=weak; if (!s) return; s.importing=NO;
             if (failure) { [s message:failure]; return; }
-            s.comments=[reader.comments copy]; s.enabled=YES; [s rebuild];
+            s.comments=[reader.comments copy];s.sourceReport=nil;s.biliMask=nil;s.maskError=nil; s.enabled=YES; [s rebuild];
             [s message:[NSString stringWithFormat:@"已导入 %lu 条弹幕%@。%@",
                 (unsigned long)s.comments.count,reader.limited?@"（已达到数量上限）":@"",
                 reader.unsupported?[NSString stringWithFormat:@" 已跳过 %lu 条未支持或无效的高级/脚本弹幕。",(unsigned long)reader.unsupported]:(s.clockAvailable?@"":@"若播放时仍未显示，当前播放器接口可能尚未适配。")]];

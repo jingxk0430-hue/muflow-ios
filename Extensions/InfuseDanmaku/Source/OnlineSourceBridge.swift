@@ -39,10 +39,24 @@ final class IFDOnlineSourceBridge: NSObject {
                 let source = try IFDSourcePolicy.normalize(value)
                 // Direct source-site access. No external proxy, account cookies,
                 // webpage video extraction or changes to Infuse video playback.
-                let result = try await NativeDanmakuService().commentsWithStatus(source, includeAdvanced: true)
+                let payload: [String: Any]
+                if source.host?.hasSuffix("bilibili.com") == true || source.host == "b23.tv" {
+                    let resolved = try await DanmakuSourceLink.resolve(source)
+                    do { payload = try await IFDBilibiliSource.load(resolved) }
+                    catch {
+                        try Task.checkCancellation()
+                        let fallback = try await NativeDanmakuService().commentsWithStatus(resolved, includeAdvanced: true)
+                        guard !fallback.comments.isEmpty else { throw error }
+                        var ordinary = IFDSourcePolicy.payload(fallback)
+                        ordinary["acquisition"] = ["status": "partial", "issues": [["stage": "bilibiliAdvanced", "status": "unavailable"]]]
+                        payload = ordinary
+                    }
+                } else {
+                    let result = try await NativeDanmakuService().commentsWithStatus(source, includeAdvanced: true)
+                    guard !result.comments.isEmpty else { throw DanmakuError.empty }
+                    payload = IFDSourcePolicy.payload(result)
+                }
                 try Task.checkCancellation()
-                guard !result.comments.isEmpty else { throw DanmakuError.empty }
-                let payload = IFDSourcePolicy.payload(result)
                 await MainActor.run {
                     progress.completedUnitCount = 1
                     progress.cancellationHandler = nil

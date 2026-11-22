@@ -44,22 +44,24 @@ inline double wiggle(double seconds) {
 struct EffectEvent { double time,duration; size_t key; };
 class EffectTimeline {
     std::vector<EffectEvent> entries_;
+    double maxDuration_=30;
 public:
-    void prepare(std::vector<EffectEvent> items) {
+    void prepare(std::vector<EffectEvent> items,double maxDuration=30,size_t capacity=8) {
+        maxDuration_=std::clamp(maxDuration,.1,120.0);
         entries_.clear();
         std::stable_sort(items.begin(),items.end(),[](auto &a,auto &b){return a.time<b.time;});
         std::priority_queue<double,std::vector<double>,std::greater<double>> ends;
         for (auto &e:items) {
-            if (!std::isfinite(e.time)||e.time<0||!std::isfinite(e.duration)||e.duration<.1||e.duration>30) continue;
+            if (!std::isfinite(e.time)||e.time<0||!std::isfinite(e.duration)||e.duration<.1||e.duration>maxDuration_) continue;
             while(!ends.empty()&&ends.top()<=e.time) ends.pop();
-            if(ends.size()>=8) continue;
+            if(ends.size()>=capacity) continue;
             entries_.push_back(e);ends.push(e.time+e.duration);
         }
     }
     const std::vector<EffectEvent>& entries() const {return entries_;}
     void at(double t,std::vector<size_t>& keys) const {
         keys.clear();if(!std::isfinite(t))return;
-        auto p=std::lower_bound(entries_.begin(),entries_.end(),t-30,[](auto &a,double b){return a.time<b;});
+        auto p=std::lower_bound(entries_.begin(),entries_.end(),t-maxDuration_,[](auto &a,double b){return a.time<b;});
         for(;p!=entries_.end()&&p->time<=t;++p)if(t<p->time+p->duration)keys.push_back(p->key);
     }
 };

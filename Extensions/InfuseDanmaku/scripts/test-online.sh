@@ -9,7 +9,7 @@ xcrun swiftc -target "$task_target" -swift-version 5 -parse-as-library -emit-mod
   -emit-module-path "$task_output/DanmakuCore.swiftmodule" -c \
   "$task_repo/Packages/DanmakuCore/Sources/DanmakuCore/Danmaku.swift" -o "$task_output/DanmakuCore.o"
 xcrun swiftc -target "$task_target" -swift-version 5 -parse-as-library -I "$task_output" "$task_output/DanmakuCore.o" \
-  "$task_root/Source/OnlineSourceBridge.swift" "$task_root/Source/SiteHTTP.swift" \
+  "$task_root/Source/BilibiliSource.swift" "$task_root/Source/OnlineSourceBridge.swift" "$task_root/Source/SiteHTTP.swift" \
   "$task_repo/App/Services/DanmakuService.swift" "$task_repo/App/Services/DanmakuSourceLink.swift" \
   "$task_repo/App/Services/NativeDanmakuService.swift" "$task_repo/App/Services/YoukuDanmakuService.swift" \
   "$task_root/Tests/OnlineSourceTests.swift" -lz -o "$task_output/online-tests"

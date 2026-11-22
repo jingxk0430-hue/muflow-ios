@@ -10,8 +10,8 @@ xcrun --sdk iphonesimulator clang++ -std=c++17 -fobjc-arc -fblocks -arch "$task_
   -mios-simulator-version-min=18.0 -isysroot "$task_sdk" -O2 -Wall -Wextra \
   -Wno-unused-parameter -Wno-deprecated-declarations "$task_root/Tests/effect_ui_test.mm" \
   -framework Foundation -framework UIKit -framework QuartzCore -framework CoreGraphics \
-  -framework CoreText -framework UniformTypeIdentifiers -o "$task_app/EffectTests"
-cp "$task_root/Tests/Fixtures/effects-demo.xml" "$task_app/"
+  -framework CoreText -lz -framework UniformTypeIdentifiers -o "$task_app/EffectTests"
+cp "$task_root/Tests/Fixtures/effects-demo.xml" "$task_root/Tests/Fixtures/bas-native-demo.bas" "$task_app/"
 python3 - "$task_app/Info.plist" <<'PY'
 import plistlib,sys
 with open(sys.argv[1],'wb') as f:
@@ -49,4 +49,4 @@ for _ in range(90):
  time.sleep(1)
 else:raise SystemExit('UIKit effect tests did not finish; check simulator crash reports')
 PY
-cp "$task_container/Documents/"effect-ui-* "$task_root/build/"
+cp "$task_container/Documents/"effect-ui-* "$task_container/Documents/bas-ui-preview.png" "$task_root/build/"

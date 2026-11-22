@@ -9,7 +9,7 @@ permissions:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: Extensions/InfuseDanmaku
@@ -27,6 +27,18 @@ jobs:
           "$RUNNER_TEMP/effects-test"
           clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework QuartzCore -framework CoreGraphics Tests/effect_model_test.mm -o "$RUNNER_TEMP/effect-model-test"
           "$RUNNER_TEMP/effect-model-test"
+      - name: Verify native BAS and Bilibili mask protocols
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror Tests/bas_test.cpp -o "$RUNNER_TEMP/bas-test"
+          "$RUNNER_TEMP/bas-test" Tests/Fixtures/bas-native-demo.bas
+          c++ -std=c++17 -Wall -Wextra -Werror Tests/bili_mask_test.cpp -lz -o "$RUNNER_TEMP/bili-mask-test"
+          "$RUNNER_TEMP/bili-mask-test"
+          c++ -std=c++17 -Wall -Wextra -Werror Tests/bili_activity_test.cpp -o "$RUNNER_TEMP/bili-activity-test"
+          "$RUNNER_TEMP/bili-activity-test"
+          clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework CoreGraphics Tests/bili_mask_image_test.mm -o "$RUNNER_TEMP/bili-mask-image-test"
+          "$RUNNER_TEMP/bili-mask-image-test"
+      - name: Verify generic Bilibili source and partial acquisitions
+        run: bash scripts/test-bilibili.sh
       - name: Verify cached host getter ABI
         run: |
           clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation Tests/host_reader_test.mm -o "$RUNNER_TEMP/host-reader-test"
@@ -54,6 +66,7 @@ jobs:
             Extensions/InfuseDanmaku/build/InfuseDanmaku.dylib
             Extensions/InfuseDanmaku/build/text-bitmap-preview.png
             Extensions/InfuseDanmaku/build/gradient-preview.png
+            Extensions/InfuseDanmaku/build/bas-ui-preview.png
             Extensions/InfuseDanmaku/build/effect-ui-preview.png
             Extensions/InfuseDanmaku/build/effect-ui-result.json
           retention-days: 7
