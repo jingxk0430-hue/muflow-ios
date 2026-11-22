@@ -60,7 +60,7 @@ inline CGImageRef createTextBitmap(CFStringRef text, CFStringRef fontName, doubl
     NSDictionary *attributes=@{(__bridge id)kCTFontAttributeName:(__bridge id)font,
         (__bridge id)kCTForegroundColorAttributeName:(__bridge id)color,
         (__bridge id)kCTStrokeColorAttributeName:(__bridge id)(stroke?:black),
-        (__bridge id)kCTStrokeWidthAttributeName:@(outline?-2.0:0)};
+        (__bridge id)kCTStrokeWidthAttributeName:@(outline?2.0:0)};
     NSAttributedString *string=[[NSAttributedString alloc] initWithString:(__bridge NSString *)text attributes:attributes];
     CTLineRef line=CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)string);
     CGFloat ascent=0,descent=0;
@@ -72,7 +72,13 @@ inline CGImageRef createTextBitmap(CFStringRef text, CFStringRef fontName, doubl
     CGContextSetTextMatrix(context,CGAffineTransformIdentity);
     const double baseline=(height/scale-ascent-descent)/2+descent;
     CGContextSetTextPosition(context,2,baseline);
-    CTLineDraw(line,context);
+    // CJK fonts can have overlapping contours. Stroke first, then paint a
+    // separate fill pass so outlines cannot cut black seams through the ink.
+    if(outline)CTLineDraw(line,context);
+    NSAttributedString *fillString=[[NSAttributedString alloc] initWithString:(__bridge NSString *)text attributes:@{
+        (__bridge id)kCTFontAttributeName:(__bridge id)font,(__bridge id)kCTForegroundColorAttributeName:(__bridge id)color}];
+    CTLineRef baseFill=CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)fillString);
+    CGContextSetTextPosition(context,2,baseline);CTLineDraw(baseFill,context);CFRelease(baseFill);
     if(colors.count>=2 && colors.count<=16 && std::isfinite(angle)) {
         CGColorSpaceRef gradientSpace=CGColorSpaceCreateDeviceRGB();
         CGContextRef maskContext=CGBitmapContextCreate(nullptr,width,height,8,width*4,gradientSpace,

@@ -25,6 +25,15 @@ int main(int argc,const char *argv[]) {
                 }
             }
             assert(ink>100*scale*scale && outline>0 && colored);
+            CGImageRef plain=ifd::createTextBitmap(CFSTR("幕流 Fg Aa 0123"),CFSTR("Helvetica"),24,
+                color,CGSizeMake(300,42),scale,nil,90,nullptr,false);
+            assert(plain);CFDataRef plainBytes=CGDataProviderCopyData(CGImageGetDataProvider(plain));
+            const UInt8 *reference=CFDataGetBytePtr(plainBytes);size_t plainStride=CGImageGetBytesPerRow(plain);
+            size_t solid=0;
+            for(size_t y=0;y<height;++y)for(size_t x=0;x<width;++x){
+                const UInt8 *p=pixels+y*stride+x*4,*r=reference+y*plainStride+x*4;
+                if(r[0]>200&&r[3]>240){++solid;assert(p[0]>180);}}
+            assert(solid>50*scale*scale);CFRelease(plainBytes);CGImageRelease(plain);
             assert(pixels[3]==0 && pixels[(height-1)*stride+(width-1)*4+3]==0);
             if(scale==3 && argc>1) {
                 NSURL *url=[NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]]];
