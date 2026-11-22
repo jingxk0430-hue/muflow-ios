@@ -48,9 +48,9 @@ public:
             active.push(end);
         }
     }
-    std::vector<Visible> at(double mediaTime) const {
-        std::vector<Visible> result;
-        if (!std::isfinite(mediaTime) || mediaTime < 0) return result;
+    void at(double mediaTime, std::vector<Visible> &result) const {
+        result.clear();
+        if (!std::isfinite(mediaTime) || mediaTime < 0) return;
         auto first = std::lower_bound(planned_.begin(), planned_.end(), mediaTime - maxLifetime_,
             [](const Placement &p, double t) { return p.comment.time < t; });
         for (auto p = first; p != planned_.end() && p->comment.time <= mediaTime; ++p) {
@@ -60,6 +60,10 @@ public:
                 : (viewport_ - p->comment.width) / 2;
             result.push_back({p->comment.key, p->comment.mode, p->lane, x});
         }
+    }
+    std::vector<Visible> at(double mediaTime) const {
+        std::vector<Visible> result;
+        at(mediaTime, result);
         return result;
     }
     const std::vector<Placement> &placements() const { return planned_; }

@@ -3,6 +3,9 @@
 #import <objc/runtime.h>
 #import <cmath>
 #import "../Core/Timeline.hpp"
+#import "../Core/MediaClock.hpp"
+#import "HostReader.hpp"
+#import "LayerMotion.hpp"
 
 @interface IFDOnlineSourceBridge : NSObject
 + (NSProgress *)loadSourceURL:(NSString *)source completion:(void (^)(NSDictionary *, NSError *))completion;
@@ -11,45 +14,13 @@
 static NSHashTable<IFDSession *> *IFDSessions;
 static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 
-// This add-on does not link Infuse or InfusePlus, and does not alter purchases.
-// Candidate classes/selectors come from the v2.6 shipped plugin. They have NOT
-// been validated in Infuse 8.5.1. Every dynamic call checks its ABI first.
-static id IFDObject(id object, NSString *name) {
-    if (!object) return nil;
-    @try {
-        SEL sel = NSSelectorFromString(name);
-        NSMethodSignature *s = [object methodSignatureForSelector:sel];
-        if (!s || s.numberOfArguments != 2 || s.methodReturnType[0] != '@') return nil;
-        NSInvocation *i = [NSInvocation invocationWithMethodSignature:s];
-        i.target = object; i.selector = sel; [i invoke];
-        __unsafe_unretained id value = nil; [i getReturnValue:&value];
-        return value;
-    } @catch (__unused NSException *e) { return nil; }
-}
-static BOOL IFDNumber(id object, NSString *name, double *value) {
-    if (!object) return NO;
-    @try {
-        SEL sel = NSSelectorFromString(name);
-        NSMethodSignature *s = [object methodSignatureForSelector:sel];
-        if (!s || s.numberOfArguments != 2) return NO;
-        const char type = s.methodReturnType[0];
-        if (type != 'd' && type != 'f' && type != 'B' && type != 'c') return NO;
-        NSInvocation *i = [NSInvocation invocationWithMethodSignature:s];
-        i.target = object; i.selector = sel; [i invoke];
-        if (type == 'd') { double v; [i getReturnValue:&v]; *value = v; }
-        else if (type == 'f') { float v; [i getReturnValue:&v]; *value = v; }
-        else if (type == 'B') { bool v; [i getReturnValue:&v]; *value = v; }
-        else { signed char v; [i getReturnValue:&v]; *value = v; }
-        return std::isfinite(*value);
-    } @catch (__unused NSException *e) { return NO; }
-}
-
 @interface IFDComment : NSObject
 @property double time;
 @property NSInteger mode;
 @property(nonatomic, copy) NSString *text;
 @property(nonatomic, strong) UIColor *color;
 @property CGFloat width;
+@property(nonatomic, strong) NSNumber *renderKey;
 @end
 @implementation IFDComment
 @end
@@ -103,6 +74,14 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 }
 @end
 
+@interface IFDRenderLabel : UILabel {
+@public
+    ifd::LayerMotion motion;
+}
+@end
+@implementation IFDRenderLabel
+@end
+
 @interface IFDDisplayProxy : NSObject
 @property(nonatomic, weak) id target;
 - (void)tick:(CADisplayLink *)link;
@@ -117,15 +96,23 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 
 @interface IFDSession : NSObject <UIDocumentPickerDelegate> {
     ifd::Timeline _timeline;
+    ifd::MediaClock _clock;
+    ifd::PlayerGetters _getters;
+    std::vector<ifd::Visible> _visible;
+    double _lastDrawnTime, _lastRenderRate, _nextPlayerLookup;
 }
 @property(nonatomic, weak) UIViewController *controller;
+@property(nonatomic, weak) id cachedPlayer;
 @property(nonatomic, strong) IFDOverlay *overlay;
 @property(nonatomic, strong) UIMenu *controlsMenu;
 @property(nonatomic, strong) NSProgress *onlineProgress;
 @property NSUInteger loadGeneration;
 @property(nonatomic, strong) CADisplayLink *displayLink;
 @property(nonatomic, strong) NSArray<IFDComment *> *comments;
-@property(nonatomic, strong) NSMutableDictionary<NSNumber *,UILabel *> *labels;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *,IFDRenderLabel *> *labels;
+@property(nonatomic, strong) NSMutableArray<IFDRenderLabel *> *recycledLabels;
+@property(nonatomic, strong) NSMutableSet<NSNumber *> *activeKeys;
+@property(nonatomic, strong) UIFont *renderFont;
 @property BOOL enabled;
 @property BOOL importing;
 @property BOOL clockAvailable;
@@ -134,6 +121,8 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 @property CGFloat area;
 @property double delay;
 @property CGSize preparedSize;
+@property CGFloat preparedScale;
+@property CGFloat measuredFontSize;
 @property NSInteger laneCount;
 - (instancetype)initWithController:(UIViewController *)controller;
 - (void)start;
@@ -145,6 +134,9 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 - (instancetype)initWithController:(UIViewController *)controller {
     if ((self=[super init])) {
         _controller=controller; _comments=@[]; _labels=[NSMutableDictionary dictionary];
+        _recycledLabels=[NSMutableArray arrayWithCapacity:36];
+        _activeKeys=[NSMutableSet setWithCapacity:36]; _visible.reserve(36);
+        _lastDrawnTime=NAN;
         _enabled=YES; _fontSize=20; _textOpacity=1; _area=.5;
         if (!IFDSessions) IFDSessions=[NSHashTable weakObjectsHashTable];
         [IFDSessions addObject:self];
@@ -164,15 +156,17 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
     }
     if (self.overlay.superview != vc.view) [vc.view addSubview:self.overlay];
     self.overlay.hidden=NO;
+    _clock.reset(); _lastDrawnTime=NAN; _nextPlayerLookup=0;
     if (!self.displayLink) {
         IFDDisplayProxy *proxy=[IFDDisplayProxy new]; proxy.target=self;
         self.displayLink=[CADisplayLink displayLinkWithTarget:proxy selector:@selector(tick:)];
-        self.displayLink.preferredFrameRateRange=CAFrameRateRangeMake(30,60,60);
+        self.displayLink.preferredFrameRateRange=CAFrameRateRangeMake(60,60,60);
         [self.displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
     }
 }
 - (void)stop {
     [self.displayLink invalidate]; self.displayLink=nil; self.overlay.hidden=YES;
+    self.cachedPlayer=nil; _clock.reset(); _lastDrawnTime=NAN;
 }
 - (void)dealloc { [_onlineProgress cancel]; [_displayLink invalidate]; [_overlay removeFromSuperview]; }
 - (UIAction *)action:(NSString *)title block:(void (^)(IFDSession *))block {
@@ -184,7 +178,7 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
 - (void)updateMenu {
     NSMutableArray<UIMenuElement *> *items=[NSMutableArray array];
     UIAction *status=[UIAction actionWithTitle:(self.onlineProgress ? @"正在获取弹幕…" :
-        [NSString stringWithFormat:@"扩展 0.1.1 · %lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
+        [NSString stringWithFormat:@"扩展 0.1.2 · %lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
                                   (double)self.fontSize,self.delay]) image:nil identifier:nil handler:^(__unused UIAction *a){}];
     status.attributes=UIMenuElementAttributesDisabled;
     [items addObject:status];
@@ -192,7 +186,7 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
     if (self.onlineProgress) [items addObject:[self action:@"取消获取弹幕" block:^(IFDSession *s){ [s cancelOnline]; }]];
     [items addObject:[self action:@"导入 XML 弹幕" block:^(IFDSession *s){ [s importXML]; }]];
     [items addObject:[self action:(self.enabled?@"关闭弹幕":@"开启弹幕") block:^(IFDSession *s){
-        s.enabled=!s.enabled; [s clearLabels]; [s updateMenu];
+        s.enabled=!s.enabled; s->_clock.reset(); [s clearLabels]; [s updateMenu];
     }]];
     [items addObject:[self action:@"字号增大" block:^(IFDSession *s){ s.fontSize=MIN(32,s.fontSize+2); [s rebuild]; }]];
     [items addObject:[self action:@"字号减小" block:^(IFDSession *s){ s.fontSize=MAX(12,s.fontSize-2); [s rebuild]; }]];
@@ -207,22 +201,34 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
     self.controlsMenu=[UIMenu menuWithTitle:@"弹幕" children:items];
 }
 - (void)clearLabels {
-    for (UILabel *l in self.labels.allValues) [l removeFromSuperview];
+    for (IFDRenderLabel *l in self.labels.allValues) [self recycleLabel:l];
     [self.labels removeAllObjects];
+    _lastDrawnTime=NAN;
+}
+- (void)recycleLabel:(IFDRenderLabel *)label {
+    [label.layer removeAnimationForKey:ifd::motionKey]; label->motion={};
+    [label removeFromSuperview];
+    if (self.recycledLabels.count<36) [self.recycledLabels addObject:label];
 }
 - (void)rebuild {
     [self clearLabels];
     CGSize size=self.overlay.bounds.size; self.preparedSize=size;
+    self.preparedScale=self.overlay.window.screen.scale ?: UIScreen.mainScreen.scale;
     CGFloat row=self.fontSize+8;
     CGFloat usableHeight=MAX(0,size.height-self.overlay.safeAreaInsets.top-self.overlay.safeAreaInsets.bottom-64);
     int lanes=MAX(1,(int)floor(usableHeight*self.area/(3*row)));
     lanes=MIN(lanes,12);
     self.laneCount=lanes;
     UIFont *font=[UIFont systemFontOfSize:self.fontSize weight:UIFontWeightRegular];
+    self.renderFont=font;
+    BOOL measure=self.measuredFontSize!=self.fontSize;
+    self.measuredFontSize=self.fontSize;
     std::vector<ifd::Comment> comments;
+    comments.reserve(self.comments.count);
     for (NSUInteger i=0;i<self.comments.count;++i) {
         IFDComment *c=self.comments[i];
-        c.width=ceil([c.text sizeWithAttributes:@{NSFontAttributeName:font}].width)+4;
+        if (measure || c.width<=0) c.width=ceil([c.text sizeWithAttributes:@{NSFontAttributeName:font}].width)+4;
+        c.renderKey=@(i);
         auto mode=c.mode==4?ifd::Mode::bottom:c.mode==5?ifd::Mode::top:ifd::Mode::scrolling;
         // Top and scrolling comments share a visual band split below in tick.
         comments.push_back({c.time,(double)c.width,mode,i});
@@ -231,42 +237,65 @@ static BOOL IFDNumber(id object, NSString *name, double *value) {
     [self updateMenu];
 }
 - (void)tick:(CADisplayLink *)link {
-    if (!CGSizeEqualToSize(self.preparedSize,self.overlay.bounds.size)) [self rebuild];
-    id vc=self.controller;
-    id player=IFDObject(vc,@"player");
-    if (!player) player=IFDObject(IFDObject(vc,@"modelContainer"),@"player");
-    double time=0;
-    self.clockAvailable=IFDNumber(player,@"currentTime",&time);
-    if (!self.clockAvailable) { [self clearLabels]; return; }
     if (!self.enabled || !self.comments.count) return;
-    // No independent animation clock: pause freezes text, seeks reconstruct it,
-    // and speed follows the player's media timestamp automatically.
-    auto visible=_timeline.at(time-self.delay);
-    NSMutableSet<NSNumber *> *active=[NSMutableSet set];
     CGFloat scale=self.overlay.window.screen.scale ?: UIScreen.mainScreen.scale;
+    if (!CGSizeEqualToSize(self.preparedSize,self.overlay.bounds.size) || self.preparedScale!=scale) [self rebuild];
+    double now=CACurrentMediaTime();
+    id player=self.cachedPlayer;
+    if (!player || now>=_nextPlayerLookup) {
+        id found=_getters.player.read(self.controller);
+        if (!found) found=_getters.player.read(_getters.container.read(self.controller));
+        if (found!=player) { _clock.reset(); _lastDrawnTime=NAN; }
+        player=found; self.cachedPlayer=found; _nextPlayerLookup=now+.25;
+    }
+    double time=0;
+    self.clockAvailable=_getters.time.read(player,time);
+    if (!self.clockAvailable) {
+        _clock.reset(); if (self.labels.count) [self clearLabels]; return;
+    }
+    double paused=0, rate=0;
+    bool hasPause=_getters.paused.read(player,paused), hasRate=_getters.rate.read(player,rate);
+    time=_clock.sample(time,now,link.targetTimestamp,hasPause&&hasRate,paused!=0,rate)-self.delay;
+    double renderRate=_clock.advancing()?rate:0;
+    if (time==_lastDrawnTime && renderRate==_lastRenderRate) return;
+    BOOL jumped=std::isfinite(_lastDrawnTime) && std::abs(time-_lastDrawnTime)>.25;
+    _lastDrawnTime=time; _lastRenderRate=renderRate;
+    _timeline.at(time,_visible);
+    NSMutableSet<NSNumber *> *active=self.activeKeys; [active removeAllObjects];
     CGFloat row=self.fontSize+8;
     CGFloat base=self.overlay.safeAreaInsets.top+8;
-    for (auto &p:visible) {
-        NSNumber *key=@(p.key); [active addObject:key];
-        IFDComment *c=self.comments[p.key]; UILabel *label=self.labels[key];
+    [CATransaction begin]; [CATransaction setDisableActions:YES];
+    for (auto &p:_visible) {
+        IFDComment *c=self.comments[p.key]; NSNumber *key=c.renderKey;
+        [active addObject:key]; IFDRenderLabel *label=self.labels[key];
         if (!label) {
-            label=[UILabel new]; label.userInteractionEnabled=NO; label.numberOfLines=1;
-            label.font=[UIFont systemFontOfSize:self.fontSize weight:UIFontWeightRegular];
+            label=self.recycledLabels.lastObject;
+            if (label) [self.recycledLabels removeLastObject]; else label=[IFDRenderLabel new];
+            label.userInteractionEnabled=NO; label.numberOfLines=1; label.opaque=NO;
+            label.font=self.renderFont;
             label.textColor=c.color; label.text=c.text;
-            label.layer.contentsScale=scale; label.layer.shouldRasterize=NO;
+            label.contentScaleFactor=scale; label.layer.contentsScale=scale;
+            // Cache text and shadow together at native screen resolution. Only
+            // position changes while scrolling; neither text nor size changes.
+            label.layer.rasterizationScale=scale; label.layer.shouldRasterize=YES;
             label.layer.shadowColor=UIColor.blackColor.CGColor;
             label.layer.shadowOpacity=.9; label.layer.shadowRadius=1; label.layer.shadowOffset=CGSizeMake(0,.5);
+            label.layer.anchorPoint=CGPointZero;
+            label.bounds=CGRectMake(0,0,c.width,row);
             label.alpha=self.textOpacity; [self.overlay addSubview:label];
             self.labels[key]=label;
         }
         CGFloat y=base+p.lane*row;
         if (p.mode==ifd::Mode::top) y+=self.laneCount*row;
         else if (p.mode==ifd::Mode::bottom) y=self.overlay.bounds.size.height-self.overlay.safeAreaInsets.bottom-42-row*(p.lane+1);
-        label.frame=CGRectMake(round(p.x*scale)/scale,round(y*scale)/scale,c.width,row);
+        CGPoint position=CGPointMake(round(p.x*scale)/scale,round(y*scale)/scale);
+        double wall=std::clamp(link.targetTimestamp,now,now+.05);
+        ifd::placeLayer(label.layer,position,p.mode==ifd::Mode::scrolling?renderRate:0,wall,jumped,label->motion);
     }
     for (NSNumber *key in self.labels.allKeys) {
-        if (![active containsObject:key]) { [self.labels[key] removeFromSuperview]; [self.labels removeObjectForKey:key]; }
+        if (![active containsObject:key]) { [self recycleLabel:self.labels[key]]; [self.labels removeObjectForKey:key]; }
     }
+    [CATransaction commit];
 }
 - (void)message:(NSString *)message {
     UIViewController *vc=self.controller;

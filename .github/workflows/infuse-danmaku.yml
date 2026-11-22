@@ -15,10 +15,20 @@ jobs:
         working-directory: Extensions/InfuseDanmaku
     steps:
       - uses: actions/checkout@v4
-      - name: Verify timeline behavior
+      - name: Verify timeline and smooth media clock
         run: |
           c++ -std=c++17 -Wall -Wextra -Werror Tests/timeline_test.cpp -o "$RUNNER_TEMP/timeline-test"
           "$RUNNER_TEMP/timeline-test"
+          c++ -std=c++17 -Wall -Wextra -Werror Tests/media_clock_test.cpp -o "$RUNNER_TEMP/media-clock-test"
+          "$RUNNER_TEMP/media-clock-test"
+      - name: Verify cached host getter ABI
+        run: |
+          clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation Tests/host_reader_test.mm -o "$RUNNER_TEMP/host-reader-test"
+          "$RUNNER_TEMP/host-reader-test"
+      - name: Verify compositor animation and playback transitions
+        run: |
+          clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework QuartzCore Tests/layer_motion_test.mm -o "$RUNNER_TEMP/layer-motion-test"
+          "$RUNNER_TEMP/layer-motion-test"
       - name: Build iOS dynamic library
         run: bash scripts/build-ios.sh
       - name: Test four-site URL and protocol bridge with local fixtures
