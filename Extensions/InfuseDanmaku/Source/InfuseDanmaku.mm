@@ -267,7 +267,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 - (instancetype)initWithController:(UIViewController *)controller {
     if ((self=[super init])) {
         _controller=controller; _comments=@[]; _labels=[NSMutableDictionary dictionary];
-        _sceneCache=[NSCache new];_sceneCache.countLimit=4;_sceneCache.totalCostLimit=32*1024*1024;
+        _sceneCache=[NSCache new];_sceneCache.countLimit=4;_sceneCache.totalCostLimit=48*1024*1024;
         _sceneLayers=[NSMutableDictionary new];_pendingScenes=[NSMutableSet new];_failedScenes=[NSMutableSet new];
         _maskBucket=NAN;_maskAspect=16./9;_masksEnabled=YES;
         _recycledLabels=[NSMutableArray arrayWithCapacity:36];
@@ -422,7 +422,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
             IFDSession *s=weak;if(!s||s.renderGeneration!=generation)return;
             [s.pendingScenes removeObject:key];
             if(prepared.error)[s.failedScenes addObject:key];
-            else [s.sceneCache setObject:prepared forKey:key cost:prepared.bytes+prepared.nodes.count*65536];
+            else [s.sceneCache setObject:prepared forKey:key cost:prepared.bytes];
             // A paused host has no advancing tick. Wake composition after the
             // worker supplies the scene, without changing the host clock.
             s->_lastDrawnTime=NAN;
@@ -451,6 +451,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 - (void)showSourceReport {
     NSUInteger bas=0,advanced=0;for(IFDComment *c in self.comments){if(c.bas)++bas;else if(c.advanced)++advanced;}
     NSMutableString *report=[NSMutableString stringWithFormat:@"普通/高级弹幕 %lu 条，高级定位 %lu 条，BAS 场景 %lu 个。\n本地 BAS：文字、矢量路径、父子层级、串并行时间线、颜色与旋转缩放；按钮仅显示，暂不响应跳转。\n不支持模板、apply、脚本和动态描边宽度。\n",(unsigned long)self.comments.count,(unsigned long)advanced,(unsigned long)bas];
+    if(bas>_scenes.entries().size())[report appendFormat:@"%lu 个 BAS 场景因寿命或并发预算未排入时间线。\n",(unsigned long)(bas-_scenes.entries().size())];
     if(self.failedScenes.count)[report appendFormat:@"%lu 个 BAS 场景因超限或未支持属性跳过。\n",(unsigned long)self.failedScenes.count];
     NSArray *activities=self.sourceReport[@"activities"];
     if(activities.count)[report appendFormat:@"收到 %lu 个活动配置；活动着色器（含黑洞/粒子）尚未接入，不以普通动画替代。\n",(unsigned long)activities.count];
@@ -696,7 +697,10 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
             dispatch_async(dispatch_get_main_queue(),^{
                 IFDSession *current=weak;if(!current||generation!=current.loadGeneration)return;
                 if(!comments.count){[current message:@"来源未返回可显示的弹幕；可能没有数据或包含尚未支持的特效。现有弹幕保留。"];return;}
-                current.comments=comments;current.sourceReport=result;current.biliMask=maskSource;current.maskError=nil;current.enabled=YES;[current rebuild];
+                current.comments=comments;
+                NSMutableDictionary *summary=[result mutableCopy];[summary removeObjectForKey:@"comments"];
+                NSMutableDictionary *maskSummary=[mask mutableCopy];[maskSummary removeObjectForKey:@"fileData"];if(maskSummary)summary[@"mask"]=maskSummary;
+                current.sourceReport=summary;current.biliMask=maskSource;current.maskError=nil;current.enabled=YES;[current rebuild];
                 NSDictionary *acquisition=result[@"acquisition"];
                 BOOL partial=[result[@"failedSegments"] integerValue]>0||[result[@"truncated"] boolValue]||[acquisition[@"status"] isEqual:@"partial"];
                 [current message:[NSString stringWithFormat:@"已载入 %lu 条弹幕%@。%@ 可在齿轮菜单查看加载结果。",(unsigned long)comments.count,partial?@"（部分数据未获取）":@"",skipped?[NSString stringWithFormat:@" 跳过 %lu 条暂不支持或无效数据。",(unsigned long)skipped]:@""]];

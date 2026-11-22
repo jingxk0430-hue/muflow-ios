@@ -103,26 +103,57 @@ inline CAKeyframeAnimation *animation(NSString *key,NSArray *values,NSArray *tim
     // A bounded set of keyframes is handed to the compositor, never redrawn on
     // each display-link callback. Include exact sequence boundaries as well.
     std::set<double> steps={0,scene.duration};
-    for(const auto &n:scene.nodes)steps.insert(n.duration);
-    for(const auto &t:scene.tracks){steps.insert(t.start);steps.insert(t.start+t.duration);}
+    auto boundary=[&](double t){steps.insert(t);if(t>0)steps.insert(std::max(0.,t-1e-6));};
+    for(const auto &n:scene.nodes)boundary(n.duration);
+    for(const auto &t:scene.tracks){boundary(t.start);boundary(t.start+t.duration);}
     for(double t=0;t<scene.duration;t+=1./30)steps.insert(t);
     if(steps.size()*scene.nodes.size()>32768){out.error=@"BAS 时间线超过本机动画预算";return out;}
     NSMutableArray *times=[NSMutableArray new];for(double t:steps)[times addObject:@(t/scene.duration)];
     NSMutableArray *nodes=[NSMutableArray new];
+    // Logical glyph coordinates stay at 64 pt; physical texture density is
+    // reserved for the largest effective font, including inherited scale.
+    std::vector<double> maxFont(scene.nodes.size(),64),initialFont(scene.nodes.size(),25);
+    std::vector<std::map<std::string,CGSize>> metrics(scene.nodes.size());
+    std::vector<int> parents(scene.nodes.size(),-1);
+    for(size_t i=0;i<scene.nodes.size();++i)for(size_t j=0;j<scene.nodes.size();++j)if(scene.nodes[j].name==scene.nodes[i].parent)parents[i]=(int)j;
+    for(double age:steps){
+        std::vector<ifd::bas::Properties> ps;for(size_t i=0;i<scene.nodes.size();++i)ps.push_back(ifd::bas::sample(scene,i,age));
+        std::vector<CGSize> sizes(scene.nodes.size(),CGSizeZero);std::vector<bool> done(scene.nodes.size(),false);
+        std::function<CGSize(size_t)> layout=[&](size_t i)->CGSize{
+            if(done[i])return sizes[i];const auto &p=ps[i];CGSize extent=parents[i]<0?size:layout(parents[i]);
+            if(scene.nodes[i].type=="path"){sizes[i]=CGSizeMake(axis(p,"width",extent.width,24),axis(p,"height",extent.height,24));}
+            else{BOOL button=scene.nodes[i].type=="button";NSString *key=variant(p,button);auto &cache=metrics[i];
+                if(!cache.count(key.UTF8String)){if(cache.size()>=8){out.error=@"BAS 文字状态超过限制";return CGSizeZero;}CTFontRef f=font(p,64);cache[key.UTF8String]=textSize(str(p,button?"text":"content"),f);CFRelease(f);}
+                CGSize m=cache[key.UTF8String];double fs=axis(p,"fontSize",extent.width,25),world=num(p,"scale",1);
+                for(int at=parents[i];at>=0;at=parents[at])world*=num(ps[at],"scale",1);
+                maxFont[i]=std::max(maxFont[i],fs*world);if(age==0)initialFont[i]=fs;
+                sizes[i]=CGSizeMake(m.width*fs/64+(button?20:0),m.height*fs/64+(button?10:0));}
+            done[i]=true;return sizes[i];
+        };
+        for(size_t i=0;i<scene.nodes.size();++i)layout(i);
+        if(out.error)return out;
+    }
     std::vector<std::map<std::string,CGSize>> measured(scene.nodes.size());
     for(size_t i=0;i<scene.nodes.size();++i){
         const auto &n=scene.nodes[i];bool button=n.type=="button";NSMutableDictionary *images=[NSMutableDictionary new];
-        std::vector<ifd::bas::Properties> variants={n.properties};
-        for(const auto &track:scene.tracks)if(track.node==i){variants.push_back(track.from);variants.push_back(track.to);
-            if(track.to.count("strokeWidth")||track.to.count("textShadow")){out.error=@"尚不支持动态描边宽度或阴影";return out;}}
+        std::vector<ifd::bas::Properties> variants;
+        // Collect actual cumulative states, not independent track deltas: a
+        // content change followed by a font change needs the combined texture.
+        for(double age:steps)variants.push_back(ifd::bas::sample(scene,i,age));
+        for(const auto &track:scene.tracks)if(track.node==i){
+            if(track.to.count("strokeWidth")||track.to.count("textShadow")||(track.to.count("fontSize")&&num(n.properties,"strokeWidth")>0)){out.error=@"尚不支持动态描边或描边与字号同时变化";return out;}}
         if(n.type!="path")for(auto properties:variants){
             auto base=n.properties;for(auto &v:properties)base[v.first]=v.second;
             NSString *key=variant(base,button);if(images[key])continue;
             if(images.count>=8){out.error=@"BAS 文字状态超过限制";return out;}
             NSString *text=str(base,button?"text":"content");CTFontRef face=font(base,64);
-            CGSize points=textSize(text,face);CGImageRef fill=textImage(text,face,points,scale,0);
+            double density=scale*maxFont[i]/64.;
+            CGSize points=textSize(text,face);CGImageRef fill=textImage(text,face,points,density,0);
             double stroke=num(base,"strokeWidth",0);if(stroke==0&&num(base,"textShadow",0)!=0)stroke=2;
-            CGImageRef outline=stroke>0?textImage(text,face,points,scale,std::clamp(stroke,0.,8.)):nullptr;
+            // CoreText width is percent-of-em; BAS width is stage pixels.
+            double percent=num(base,"strokeWidth")>0?100*stroke/std::max(1.,initialFont[i]):(stroke>0?2:0);
+            if(percent>10){if(fill)CGImageRelease(fill);CFRelease(face);out.error=@"BAS 描边超过清晰贴图边界";return out;}
+            CGImageRef outline=stroke>0?textImage(text,face,points,density,std::clamp(percent,0.,32.)):nullptr;
             CFRelease(face);
             if(!fill){if(outline)CGImageRelease(outline);out.error=@"BAS 文字贴图超过限制";return out;}
             out.bytes+=CGImageGetBytesPerRow(fill)*CGImageGetHeight(fill)*(outline?2:1);
@@ -148,7 +179,11 @@ inline CAKeyframeAnimation *animation(NSString *key,NSArray *values,NSArray *tim
         std::function<CGSize(size_t)> layout=[&](size_t i)->CGSize{
             if(resolved[i])return sizes[i];NSInteger parent=[nodes[i][@"parent"] integerValue];CGSize extent=parent<0?size:layout((size_t)parent);
             const auto &p=props[i];BOOL path=scene.nodes[i].type=="path",button=scene.nodes[i].type=="button";
-            if(path){CGRect vb=[nodes[i][@"viewBox"] CGRectValue];sizes[i]=CGSizeMake(axis(p,"width",extent.width,vb.size.width),axis(p,"height",extent.height,vb.size.height));}
+            if(path){CGRect vb=[nodes[i][@"viewBox"] CGRectValue];
+                double w=axis(p,"width",extent.width,vb.size.width),h=axis(p,"height",extent.height,vb.size.height);
+                if(p.count("width")&&!p.count("height"))h=w*vb.size.height/vb.size.width;
+                if(p.count("height")&&!p.count("width"))w=h*vb.size.width/vb.size.height;
+                sizes[i]=CGSizeMake(w,h);}
             else{CGSize base=measured[i][variant(p,button).UTF8String];double f=axis(p,"fontSize",extent.width,25)/64.;sizes[i]=CGSizeMake(base.width*f+(button?20:0),base.height*f+(button?10:0));}
             resolved[i]=true;return sizes[i];
         };
@@ -169,10 +204,12 @@ inline CAKeyframeAnimation *animation(NSString *key,NSArray *values,NSArray *tim
                 add(@"ink.fillColor",(__bridge id)color(p,"fillColor",num(p,"fillAlpha",1)).CGColor);add(@"ink.strokeColor",(__bridge id)color(p,"borderColor",num(p,"borderAlpha",1)).CGColor);add(@"ink.lineWidth",@(num(p,"borderWidth")));}
             else {double fontSize=axis(p,"fontSize",extent.width,25);add(@"ink.transform",[NSValue valueWithCATransform3D:CATransform3DMakeScale(fontSize/64.,fontSize/64.,1)]);
                 add(@"ink.color",(__bridge id)color(p,button?"textColor":"color",button?num(p,"textAlpha",1):1).CGColor);
-                add(@"ink.stroke",(__bridge id)color(p,"strokeColor").CGColor);add(@"ink.variant",variant(p,button));
+                add(@"ink.stroke",(__bridge id)(num(p,"strokeWidth")==0&&num(p,"textShadow")!=0?UIColor.blackColor:color(p,"strokeColor")).CGColor);add(@"ink.variant",variant(p,button));
                 if(button)add(@"backgroundColor",(__bridge id)color(p,"fillColor",num(p,"fillAlpha",1)).CGColor);}
         }
     }
+    out.bytes+=steps.size()*scene.nodes.size()*600; // NSArray/NSNumber/CGColor animation storage estimate
+    if(out.bytes>24*1024*1024){out.error=@"BAS 场景总内存超过 24 MB";return out;}
     out.nodes=nodes;return out;
 }
 @end

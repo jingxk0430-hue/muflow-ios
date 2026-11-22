@@ -61,6 +61,21 @@
     });
 }
 - (void)verifyBASWithAdvanced:(NSUInteger)advanced styled:(NSUInteger)styled {
+    // Native contract regressions beyond the language parser: cumulative text
+    // states, intrinsic SVG ratio, discrete boundaries and physical resolution.
+    IFDBASDocument *states=[IFDBASDocument parse:@"def text t {content=\"A\" textShadow=0} set t {content=\"B\"} 0s then set t {fontFamily=\"serif\"} 1s"];
+    IFDBASPrepared *prepared=[IFDBASPrepared prepare:states size:self.window.bounds.size scale:3];
+    assert(!prepared.error&&prepared.nodes[0][@"images"][@"B|serif|1"]);
+    IFDBASDocument *geometry=[IFDBASDocument parse:@"def path p {d=\"M0 0H24V24Z\" viewBox=\"0 0 24 24\" width=20%}"];
+    prepared=[IFDBASPrepared prepare:geometry size:self.window.bounds.size scale:3];assert(!prepared.error);
+    CGRect square=[prepared.nodes[0][@"values"][@"bounds"][0] CGRectValue];assert(fabs(square.size.width-square.size.height)<.001);
+    IFDBASDocument *large=[IFDBASDocument parse:@"def text t {content=\"清晰字号\" fontSize=80 scale=1.5 textShadow=0} set t {alpha=0} 1s,\"step-end\""];
+    prepared=[IFDBASPrepared prepare:large size:self.window.bounds.size scale:3];assert(!prepared.error);
+    IFDBASImage *asset=[prepared.nodes[0][@"images"][@"清晰字号|SimHei|1"] objectForKey:@"fill"];
+    assert(CGImageGetWidth(asset.image)>=floor(asset.size.width*3*120/64));
+    NSArray *times=prepared.nodes[0][@"times"];BOOL hasEdge=NO;
+    for(NSUInteger i=1;i<times.count;++i)if(fabs([times[i] doubleValue]-1./large->scene.duration)<1e-9&&[times[i] doubleValue]-[times[i-1] doubleValue]<1e-5)hasEdge=YES;
+    assert(hasEdge);
     NSString *source=[NSString stringWithContentsOfFile:[NSBundle.mainBundle pathForResource:@"bas-native-demo" ofType:@"bas"] encoding:NSUTF8StringEncoding error:nil];
     IFDBASDocument *document=[IFDBASDocument parse:source];assert(document.error==nil&&document->scene.nodes.size()==4);
     IFDComment *comment=[IFDComment new];comment.bas=document;comment.mode=9;comment.time=0;comment.text=@"BAS";
@@ -76,13 +91,24 @@
         UIGraphicsImageRenderer *renderer=[[UIGraphicsImageRenderer alloc] initWithBounds:self.window.bounds];
         UIImage *image=[renderer imageWithActions:^(__unused UIGraphicsImageRendererContext *c){[self.window drawViewHierarchyInRect:self.window.bounds afterScreenUpdates:YES];}];
         [UIImagePNGRepresentation(image) writeToFile:[directory stringByAppendingPathComponent:@"bas-ui-preview.png"] atomically:YES];
+        [self verifyMaskWithAdvanced:advanced styled:styled];
+    });
+}
+- (void)verifyMaskWithAdvanced:(NSUInteger)advanced styled:(NSUInteger)styled {
+    NSData *maskData=[[NSData alloc] initWithBase64EncodedString:@"TUFTSwAAAAECAAAAAAAAAQAAAAAAAAAAAAAAAAAAACB4nGNgYJjFAAY8timJJYlWmbmJ6an6xWXp2hW5OdZJicWpZiY6AR5+RlGVTkaJ4WHGgbmWJgHBnuWeLo7pviGRQDq73DPLxCLZ3c0g0dkpNzG8otgnwsswyT3U0jM3zCgq3LQsyj0w09M90NIz2wCo3skTpC8sK7s82MUpMSQkGSgWCmRnQ8WSy8MzPcsCssrLko2j8gLSbW0BHls02w==" options:0];
+    self.session.biliMask=[[IFDBiliMask alloc] initWithData:maskData fps:15];assert(self.session.biliMask);
+    [self.session resetMask];
+    NSString *directory=NSSearchPathForDirectoriesInDomains(NSDocumentDirectory,NSUserDomainMask,YES).firstObject;
+    IFDTestController *vc=(IFDTestController *)self.window.rootViewController;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
+        assert(self.session.maskImage&&self.session.overlay.layer.mask&&self.session.maskError==nil);
         vc.player.currentTime=10;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
-            assert(self.session.sceneLayers.count==0);vc.player.currentTime=3;
+            assert(self.session.sceneLayers.count==0&&self.session.overlay.layer.mask==nil);vc.player.currentTime=3;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
                 assert(self.session.sceneLayers.count==1);self.session.effectsEnabled=NO;[self.session rebuild];assert(self.session.sceneLayers.count==0);
                 [self.session stop];assert(self.session.labels.count==0&&self.session.sceneLayers.count==0&&self.session.displayLink==nil);
-            NSData *result=[NSJSONSerialization dataWithJSONObject:@{@"passed":@YES,@"advancedLayers":@(advanced),@"styledLayers":@(styled),@"checks":@[@"XML",@"background bitmap delivery",@"paused layer composition",@"backward seek",@"effect disable",@"BAS native text/path/button",@"BAS parent bounds",@"BAS paused compositor",@"BAS expired and backward seek",@"stop cleanup"]} options:NSJSONWritingPrettyPrinted error:nil];
+            NSData *result=[NSJSONSerialization dataWithJSONObject:@{@"passed":@YES,@"advancedLayers":@(advanced),@"styledLayers":@(styled),@"checks":@[@"XML",@"background bitmap delivery",@"paused layer composition",@"backward seek",@"effect disable",@"BAS native text/path/button",@"BAS parent bounds",@"BAS paused compositor",@"BAS expired and backward seek",@"SVG mask worker delivery and stale frame clear",@"stop cleanup"]} options:NSJSONWritingPrettyPrinted error:nil];
             [result writeToFile:[directory stringByAppendingPathComponent:@"effect-ui-result.json"] atomically:YES];
             });
         });
