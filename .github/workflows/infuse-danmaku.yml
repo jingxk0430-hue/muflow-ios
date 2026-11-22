@@ -31,11 +31,17 @@ jobs:
           "$RUNNER_TEMP/layer-motion-test"
       - name: Build iOS dynamic library
         run: bash scripts/build-ios.sh
+      - name: Verify native-resolution text bitmaps
+        run: |
+          clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework CoreGraphics -framework CoreText -framework ImageIO Tests/text_bitmap_test.mm -o "$RUNNER_TEMP/text-bitmap-test"
+          "$RUNNER_TEMP/text-bitmap-test" build/text-bitmap-preview.png
       - name: Test four-site URL and protocol bridge with local fixtures
         run: bash scripts/test-online.sh
       - uses: actions/upload-artifact@v4
         with:
           name: InfuseDanmaku-arm64-unsigned
-          path: Extensions/InfuseDanmaku/build/InfuseDanmaku.dylib
+          path: |
+            Extensions/InfuseDanmaku/build/InfuseDanmaku.dylib
+            Extensions/InfuseDanmaku/build/text-bitmap-preview.png
           retention-days: 7
           if-no-files-found: error

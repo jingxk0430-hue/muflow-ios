@@ -20,7 +20,7 @@ xcrun --sdk iphoneos swiftc -sdk "$task_sdk" -target arm64-apple-ios18.0 \
   "$task_root/Source/OnlineSourceBridge.swift" "$task_root/Source/SiteHTTP.swift" \
   "$task_repo/App/Services/DanmakuService.swift" "$task_repo/App/Services/DanmakuSourceLink.swift" \
   "$task_repo/App/Services/NativeDanmakuService.swift" "$task_repo/App/Services/YoukuDanmakuService.swift" \
-  -framework Foundation -framework UIKit -framework QuartzCore -framework CoreGraphics \
+  -framework Foundation -framework UIKit -framework QuartzCore -framework CoreGraphics -framework CoreText \
   -framework UniformTypeIdentifiers -lc++ -lz \
   -Xlinker -install_name -Xlinker @rpath/InfuseDanmaku.dylib \
   -o "$task_output/InfuseDanmaku.dylib"

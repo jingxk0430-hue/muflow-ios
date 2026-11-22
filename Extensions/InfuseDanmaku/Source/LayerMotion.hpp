@@ -4,7 +4,7 @@
 
 namespace ifd {
 static NSString *const motionKey = @"com.muflow.infusedanmaku.scroll";
-struct LayerMotion { double rate = 0, nextCheck = 0; };
+struct LayerMotion { double rate = 0, nextCheck = 0, anchorX = 0, anchorY = 0, anchorWall = 0; };
 
 // A linear compositor animation advances between host callbacks, even when the
 // main thread misses a display-link tick. The caller still owns media-time
@@ -19,9 +19,12 @@ inline void placeLayer(CALayer *layer, CGPoint position, double rate, double wal
     }
     bool restart = force || motion.rate != rate;
     if (!restart && wall >= motion.nextCheck) {
-        CALayer *presentation = layer.presentationLayer;
-        restart = (presentation && std::abs(presentation.position.x - position.x) > 2) ||
-            std::abs(layer.position.y - position.y) > .5;
+        // Both positions refer to the same future display time. Comparing a
+        // targetTimestamp position with presentationLayer (an earlier frame)
+        // spuriously reanchors at 2x/3x, even when the animation is on time.
+        const double expected=motion.anchorX-90*motion.rate*(wall-motion.anchorWall);
+        restart = wall < motion.anchorWall || std::abs(expected-position.x)>2 ||
+            std::abs(motion.anchorY-position.y)>.5;
         motion.nextCheck = wall + .2;
     }
     if (!restart) return;
@@ -37,5 +40,6 @@ inline void placeLayer(CALayer *layer, CGPoint position, double rate, double wal
     layer.position = CGPointMake(end, position.y);
     [layer addAnimation:animation forKey:motionKey];
     motion.rate = rate; motion.nextCheck = wall + .2;
+    motion.anchorX=position.x; motion.anchorY=position.y; motion.anchorWall=wall;
 }
 } // namespace ifd

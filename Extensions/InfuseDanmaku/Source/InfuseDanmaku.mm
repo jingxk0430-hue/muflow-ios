@@ -6,6 +6,7 @@
 #import "../Core/MediaClock.hpp"
 #import "HostReader.hpp"
 #import "LayerMotion.hpp"
+#import "TextBitmap.hpp"
 
 @interface IFDOnlineSourceBridge : NSObject
 + (NSProgress *)loadSourceURL:(NSString *)source completion:(void (^)(NSDictionary *, NSError *))completion;
@@ -74,12 +75,42 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 }
 @end
 
-@interface IFDRenderLabel : UILabel {
+@interface IFDTextImage : NSObject
+@property(nonatomic, readonly) CGImageRef image;
+- (instancetype)initWithImage:(CGImageRef)image;
+@end
+@implementation IFDTextImage
+- (instancetype)initWithImage:(CGImageRef)image {
+    if ((self=[super init])) _image=CGImageRetain(image);
+    return self;
+}
+- (void)dealloc { CGImageRelease(_image); }
+@end
+
+@interface IFDRenderLabel : UIView {
 @public
     ifd::LayerMotion motion;
 }
+@property(nonatomic, strong) UILabel *fallback;
+- (void)showImage:(IFDTextImage *)image;
+- (void)showFallback:(IFDComment *)comment font:(UIFont *)font;
 @end
 @implementation IFDRenderLabel
+- (void)showImage:(IFDTextImage *)image {
+    [self.fallback removeFromSuperview]; self.fallback=nil;
+    self.layer.contents=(__bridge id)image.image;
+}
+- (void)showFallback:(IFDComment *)comment font:(UIFont *)font {
+    if (!self.fallback) {
+        self.fallback=[[UILabel alloc] initWithFrame:self.bounds];
+        self.fallback.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        self.fallback.numberOfLines=1; self.fallback.userInteractionEnabled=NO;
+        [self addSubview:self.fallback];
+    }
+    self.fallback.attributedText=[[NSAttributedString alloc] initWithString:comment.text attributes:@{
+        NSFontAttributeName:font,NSForegroundColorAttributeName:comment.color,
+        NSStrokeColorAttributeName:[UIColor colorWithWhite:0 alpha:.9],NSStrokeWidthAttributeName:@(-2.0)}];
+}
 @end
 
 @interface IFDDisplayProxy : NSObject
@@ -99,7 +130,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     ifd::MediaClock _clock;
     ifd::PlayerGetters _getters;
     std::vector<ifd::Visible> _visible;
-    double _lastDrawnTime, _lastRenderRate, _nextPlayerLookup;
+    double _lastDrawnTime, _lastRenderRate, _nextPlayerLookup, _nextPrewarm;
 }
 @property(nonatomic, weak) UIViewController *controller;
 @property(nonatomic, weak) id cachedPlayer;
@@ -113,6 +144,11 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 @property(nonatomic, strong) NSMutableArray<IFDRenderLabel *> *recycledLabels;
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *activeKeys;
 @property(nonatomic, strong) UIFont *renderFont;
+@property(nonatomic, strong) NSCache<NSNumber *,IFDTextImage *> *textImages;
+@property(nonatomic, strong) NSOperationQueue *textQueue;
+@property(nonatomic, strong) NSMutableSet<NSNumber *> *pendingImages;
+@property(nonatomic, weak) NSArray<IFDComment *> *preparedComments;
+@property NSUInteger renderGeneration;
 @property BOOL enabled;
 @property BOOL importing;
 @property BOOL clockAvailable;
@@ -128,6 +164,9 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 - (void)start;
 - (void)stop;
 - (void)updateMenu;
+- (void)cancelTextPreparation;
+- (void)prepareImage:(IFDComment *)comment;
+- (void)prewarmAt:(double)time;
 @end
 
 @implementation IFDSession
@@ -136,6 +175,10 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         _controller=controller; _comments=@[]; _labels=[NSMutableDictionary dictionary];
         _recycledLabels=[NSMutableArray arrayWithCapacity:36];
         _activeKeys=[NSMutableSet setWithCapacity:36]; _visible.reserve(36);
+        _textImages=[NSCache new]; _textImages.countLimit=128; _textImages.totalCostLimit=12*1024*1024;
+        _pendingImages=[NSMutableSet setWithCapacity:72];
+        _textQueue=[NSOperationQueue new]; _textQueue.maxConcurrentOperationCount=1;
+        _textQueue.qualityOfService=NSQualityOfServiceUserInitiated;
         _lastDrawnTime=NAN;
         _enabled=YES; _fontSize=20; _textOpacity=1; _area=.5;
         if (!IFDSessions) IFDSessions=[NSHashTable weakObjectsHashTable];
@@ -165,10 +208,11 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     }
 }
 - (void)stop {
+    [self cancelTextPreparation]; [self clearLabels];
     [self.displayLink invalidate]; self.displayLink=nil; self.overlay.hidden=YES;
     self.cachedPlayer=nil; _clock.reset(); _lastDrawnTime=NAN;
 }
-- (void)dealloc { [_onlineProgress cancel]; [_displayLink invalidate]; [_overlay removeFromSuperview]; }
+- (void)dealloc { [_onlineProgress cancel]; [_textQueue cancelAllOperations]; [_displayLink invalidate]; [_overlay removeFromSuperview]; }
 - (UIAction *)action:(NSString *)title block:(void (^)(IFDSession *))block {
     __weak IFDSession *weak=self;
     return [UIAction actionWithTitle:title image:nil identifier:nil handler:^(__unused UIAction *a) {
@@ -178,7 +222,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 - (void)updateMenu {
     NSMutableArray<UIMenuElement *> *items=[NSMutableArray array];
     UIAction *status=[UIAction actionWithTitle:(self.onlineProgress ? @"正在获取弹幕…" :
-        [NSString stringWithFormat:@"扩展 0.1.2 · %lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
+        [NSString stringWithFormat:@"扩展 0.1.3 · %lu 条 · %g 号 · 延迟 %+.1fs",(unsigned long)self.comments.count,
                                   (double)self.fontSize,self.delay]) image:nil identifier:nil handler:^(__unused UIAction *a){}];
     status.attributes=UIMenuElementAttributesDisabled;
     [items addObject:status];
@@ -186,7 +230,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     if (self.onlineProgress) [items addObject:[self action:@"取消获取弹幕" block:^(IFDSession *s){ [s cancelOnline]; }]];
     [items addObject:[self action:@"导入 XML 弹幕" block:^(IFDSession *s){ [s importXML]; }]];
     [items addObject:[self action:(self.enabled?@"关闭弹幕":@"开启弹幕") block:^(IFDSession *s){
-        s.enabled=!s.enabled; s->_clock.reset(); [s clearLabels]; [s updateMenu];
+        s.enabled=!s.enabled; s->_clock.reset(); [s cancelTextPreparation]; [s clearLabels]; [s updateMenu];
     }]];
     [items addObject:[self action:@"字号增大" block:^(IFDSession *s){ s.fontSize=MIN(32,s.fontSize+2); [s rebuild]; }]];
     [items addObject:[self action:@"字号减小" block:^(IFDSession *s){ s.fontSize=MAX(12,s.fontSize-2); [s rebuild]; }]];
@@ -207,10 +251,16 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 }
 - (void)recycleLabel:(IFDRenderLabel *)label {
     [label.layer removeAnimationForKey:ifd::motionKey]; label->motion={};
+    label.layer.contents=nil; [label.fallback removeFromSuperview]; label.fallback=nil;
     [label removeFromSuperview];
     if (self.recycledLabels.count<36) [self.recycledLabels addObject:label];
 }
 - (void)rebuild {
+    BOOL resetImages=self.measuredFontSize!=self.fontSize || self.preparedComments!=self.comments ||
+        self.preparedScale!=(self.overlay.window.screen.scale ?: UIScreen.mainScreen.scale);
+    [self cancelTextPreparation];
+    if (resetImages) [self.textImages removeAllObjects];
+    self.preparedComments=self.comments;
     [self clearLabels];
     CGSize size=self.overlay.bounds.size; self.preparedSize=size;
     self.preparedScale=self.overlay.window.screen.scale ?: UIScreen.mainScreen.scale;
@@ -236,6 +286,51 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     _timeline.prepare(std::move(comments),size.width,lanes,90,36);
     [self updateMenu];
 }
+- (void)cancelTextPreparation {
+    self.renderGeneration++; [self.textQueue cancelAllOperations];
+    [self.pendingImages removeAllObjects]; _nextPrewarm=0;
+}
+- (void)prepareImage:(IFDComment *)comment {
+    NSNumber *key=comment.renderKey;
+    if (!key || [self.textImages objectForKey:key] || [self.pendingImages containsObject:key] ||
+        self.pendingImages.count>=72) return;
+    CGSize size=CGSizeMake(comment.width,self.fontSize+8); CGFloat scale=self.preparedScale;
+    size_t width=0,height=0;
+    if (!ifd::bitmapSize(size,scale,width,height)) return;
+    [self.pendingImages addObject:key]; NSUInteger generation=self.renderGeneration;
+    NSString *text=comment.text,*fontName=self.renderFont.fontName;
+    CGFloat fontSize=self.fontSize; UIColor *color=comment.color;
+    __weak IFDSession *weak=self;
+    [self.textQueue addOperationWithBlock:^{
+        @autoreleasepool {
+            CGImageRef pixels=ifd::createTextBitmap((__bridge CFStringRef)text,(__bridge CFStringRef)fontName,
+                fontSize,color.CGColor,size,scale);
+            IFDTextImage *image=pixels?[[IFDTextImage alloc] initWithImage:pixels]:nil;
+            if (pixels) CGImageRelease(pixels);
+            dispatch_async(dispatch_get_main_queue(),^{
+                IFDSession *s=weak; if (!s || generation!=s.renderGeneration) return;
+                [s.pendingImages removeObject:key];
+                if (image) {
+                    [s.textImages setObject:image forKey:key cost:CGImageGetBytesPerRow(image.image)*CGImageGetHeight(image.image)];
+                    [CATransaction begin]; [CATransaction setDisableActions:YES];
+                    [s.labels[key] showImage:image];
+                    [CATransaction commit];
+                } else [s.labels[key] showFallback:comment font:s.renderFont];
+            });
+        }
+    }];
+}
+- (void)prewarmAt:(double)time {
+    const auto &placements=_timeline.placements();
+    auto p=std::lower_bound(placements.begin(),placements.end(),time,
+        [](const ifd::Placement &entry,double t){ return entry.comment.time<t; });
+    NSUInteger requested=0;
+    for (;p!=placements.end() && p->comment.time<=time+1.5 && requested<12;++p) {
+        NSUInteger before=self.pendingImages.count;
+        [self prepareImage:self.comments[p->comment.key]];
+        if (self.pendingImages.count>before) ++requested;
+    }
+}
 - (void)tick:(CADisplayLink *)link {
     if (!self.enabled || !self.comments.count) return;
     CGFloat scale=self.overlay.window.screen.scale ?: UIScreen.mainScreen.scale;
@@ -259,6 +354,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     double renderRate=_clock.advancing()?rate:0;
     if (time==_lastDrawnTime && renderRate==_lastRenderRate) return;
     BOOL jumped=std::isfinite(_lastDrawnTime) && std::abs(time-_lastDrawnTime)>.25;
+    if (jumped) [self cancelTextPreparation];
     _lastDrawnTime=time; _lastRenderRate=renderRate;
     _timeline.at(time,_visible);
     NSMutableSet<NSNumber *> *active=self.activeKeys; [active removeAllObjects];
@@ -271,19 +367,22 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         if (!label) {
             label=self.recycledLabels.lastObject;
             if (label) [self.recycledLabels removeLastObject]; else label=[IFDRenderLabel new];
-            label.userInteractionEnabled=NO; label.numberOfLines=1; label.opaque=NO;
-            label.font=self.renderFont;
-            label.textColor=c.color; label.text=c.text;
+            label.userInteractionEnabled=NO; label.opaque=NO;
             label.contentScaleFactor=scale; label.layer.contentsScale=scale;
-            // Cache text and shadow together at native screen resolution. Only
-            // position changes while scrolling; neither text nor size changes.
-            label.layer.rasterizationScale=scale; label.layer.shouldRasterize=YES;
-            label.layer.shadowColor=UIColor.blackColor.CGColor;
-            label.layer.shadowOpacity=.9; label.layer.shadowRadius=1; label.layer.shadowOffset=CGSizeMake(0,.5);
+            label.layer.shouldRasterize=NO;
             label.layer.anchorPoint=CGPointZero;
             label.bounds=CGRectMake(0,0,c.width,row);
             label.alpha=self.textOpacity; [self.overlay addSubview:label];
             self.labels[key]=label;
+            IFDTextImage *image=[self.textImages objectForKey:key];
+            if (image) [label showImage:image];
+            else {
+                size_t width=0,height=0;
+                if (!ifd::bitmapSize(label.bounds.size,scale,width,height) ||
+                    (self.pendingImages.count>=72 && ![self.pendingImages containsObject:key]))
+                    [label showFallback:c font:self.renderFont];
+                else [self prepareImage:c];
+            }
         }
         CGFloat y=base+p.lane*row;
         if (p.mode==ifd::Mode::top) y+=self.laneCount*row;
@@ -296,6 +395,8 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         if (![active containsObject:key]) { [self recycleLabel:self.labels[key]]; [self.labels removeObjectForKey:key]; }
     }
     [CATransaction commit];
+    // Visible comments take priority over speculative preparation.
+    if (now>=_nextPrewarm) { [self prewarmAt:time]; _nextPrewarm=now+.1; }
 }
 - (void)message:(NSString *)message {
     UIViewController *vc=self.controller;

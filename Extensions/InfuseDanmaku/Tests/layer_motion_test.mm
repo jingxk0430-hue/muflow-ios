@@ -1,6 +1,12 @@
 #import "../Source/LayerMotion.hpp"
 #include <cassert>
 #include <iostream>
+@interface StalePresentationLayer : CALayer
+@property(nonatomic,strong) CALayer *snapshot;
+@end
+@implementation StalePresentationLayer
+- (instancetype)presentationLayer { return (id)self.snapshot; }
+@end
 int main() {
     @autoreleasepool {
         CALayer *layer=[CALayer layer];
@@ -27,6 +33,21 @@ int main() {
         // An explicit seek must reanchor even with an unchanged playback rate.
         ifd::placeLayer(layer,CGPointMake(80,20),2,now+2.016,true,motion);
         assert([((CABasicAnimation *)[layer animationForKey:ifd::motionKey]).fromValue doubleValue]==80);
+        // The presentation snapshot may be one frame older than targetTimestamp.
+        // At 2x/3x this exceeds the old 2-point threshold despite perfect motion.
+        for(double rate : {2.,3.}) {
+            StalePresentationLayer *moving=[StalePresentationLayer layer];
+            moving.bounds=CGRectMake(0,0,100,28); moving.anchorPoint=CGPointZero;
+            moving.snapshot=[CALayer layer]; ifd::LayerMotion state;
+            ifd::placeLayer(moving,CGPointMake(500,20),rate,now+10,false,state);
+            double begin=((CABasicAnimation *)[moving animationForKey:ifd::motionKey]).beginTime;
+            moving.snapshot.position=CGPointMake(500-90*rate*(.21-1./60),20);
+            ifd::placeLayer(moving,CGPointMake(500-90*rate*.21,20),rate,now+10.21,false,state);
+            assert(((CABasicAnimation *)[moving animationForKey:ifd::motionKey]).beginTime==begin);
+            // A genuine media-time discrepancy still causes a correction.
+            ifd::placeLayer(moving,CGPointMake(500-90*rate*.42-10,20),rate,now+10.42,false,state);
+            assert(((CABasicAnimation *)[moving animationForKey:ifd::motionKey]).beginTime!=begin);
+        }
         [CATransaction commit];
         std::cout << "layer motion: linear compositor animation, no per-frame restart, pause, rate and seek passed\n";
     }
