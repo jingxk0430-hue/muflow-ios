@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['codex/infuse-danmaku-addon']
-    paths: ['Extensions/InfuseDanmaku/**', '.github/workflows/infuse-danmaku.yml']
+    paths: ['Extensions/InfuseDanmaku/**', 'App/Services/**', 'Packages/DanmakuCore/**', '.github/workflows/infuse-danmaku.yml']
 permissions:
   contents: read
 jobs:
@@ -21,6 +21,12 @@ jobs:
           "$RUNNER_TEMP/timeline-test"
           c++ -std=c++17 -Wall -Wextra -Werror Tests/media_clock_test.cpp -o "$RUNNER_TEMP/media-clock-test"
           "$RUNNER_TEMP/media-clock-test"
+      - name: Verify effect geometry and scheduling
+        run: |
+          c++ -std=c++17 -Wall -Wextra -Werror Tests/effects_test.cpp -o "$RUNNER_TEMP/effects-test"
+          "$RUNNER_TEMP/effects-test"
+          clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework QuartzCore -framework CoreGraphics Tests/effect_model_test.mm -o "$RUNNER_TEMP/effect-model-test"
+          "$RUNNER_TEMP/effect-model-test"
       - name: Verify cached host getter ABI
         run: |
           clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation Tests/host_reader_test.mm -o "$RUNNER_TEMP/host-reader-test"
@@ -34,7 +40,9 @@ jobs:
       - name: Verify native-resolution text bitmaps
         run: |
           clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework CoreGraphics -framework CoreText -framework ImageIO Tests/text_bitmap_test.mm -o "$RUNNER_TEMP/text-bitmap-test"
-          "$RUNNER_TEMP/text-bitmap-test" build/text-bitmap-preview.png
+          "$RUNNER_TEMP/text-bitmap-test" build/text-bitmap-preview.png build/gradient-preview.png
+      - name: Verify shared ordinary parser regression
+        run: swift test --package-path ../../Packages/DanmakuCore
       - name: Test four-site URL and protocol bridge with local fixtures
         run: bash scripts/test-online.sh
       - uses: actions/upload-artifact@v4
@@ -43,5 +51,6 @@ jobs:
           path: |
             Extensions/InfuseDanmaku/build/InfuseDanmaku.dylib
             Extensions/InfuseDanmaku/build/text-bitmap-preview.png
+            Extensions/InfuseDanmaku/build/gradient-preview.png
           retention-days: 7
           if-no-files-found: error

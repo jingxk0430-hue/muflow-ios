@@ -33,6 +33,24 @@ int main(int argc,const char *argv[]) {
             }
             CFRelease(bytes); CGImageRelease(image);
         }
+        CGImageRef gradient=ifd::createTextBitmap(CFSTR("MMMMMMMMMMMM"),CFSTR("Helvetica"),24,
+            color,CGSizeMake(250,42),3,@[@0xff0000,@0x0000ff],90);
+        assert(gradient);
+        CFDataRef gradientBytes=CGDataProviderCopyData(CGImageGetDataProvider(gradient));
+        const UInt8 *g=CFDataGetBytePtr(gradientBytes);size_t stride=CGImageGetBytesPerRow(gradient);
+        bool red=false,blue=false;
+        for(size_t y=0;y<CGImageGetHeight(gradient);++y)for(size_t x=0;x<CGImageGetWidth(gradient);++x){
+            const UInt8 *p=g+y*stride+x*4;if(p[3]>200){if(x<250&&p[0]>p[2]*2)red=true;if(x>500&&p[2]>p[0]*2)blue=true;}}
+        assert(red&&blue);
+        if(argc>2){NSURL *url=[NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[2]]];
+            CGImageDestinationRef out=CGImageDestinationCreateWithURL((__bridge CFURLRef)url,CFSTR("public.png"),1,nullptr);
+            assert(out);CGImageDestinationAddImage(out,gradient,nullptr);assert(CGImageDestinationFinalize(out));CFRelease(out);}
+        CFRelease(gradientBytes);CGImageRelease(gradient);
+        auto slices=ifd::glyphSlices(CFSTR("A👨‍👩‍👧‍👦中é"),CFSTR("Helvetica"),24,CGSizeMake(250,42));
+        assert(slices.size()==4);double end=0;
+        for(auto &r:slices){assert(std::abs(r.origin.x-end)<.01&&r.size.width>=0);end=CGRectGetMaxX(r);}
+        assert(end==250);
+        assert(ifd::glyphSlices((__bridge CFStringRef)[@"A" stringByPaddingToLength:65 withString:@"A" startingAtIndex:0],CFSTR("Helvetica"),24,CGSizeMake(2000,42)).empty());
         size_t w=0,h=0;
         assert(!ifd::bitmapSize(CGSizeMake(100000,1000),3,w,h));
         assert(!ifd::bitmapSize(CGSizeMake(100,20),NAN,w,h));

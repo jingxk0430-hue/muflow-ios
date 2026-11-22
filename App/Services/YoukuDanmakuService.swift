@@ -146,7 +146,7 @@ struct YoukuDanmakuService: Sendable {
                     let properties = (row["propertis"] as? String).flatMap { $0.data(using: .utf8) }
                         .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
                     let color = properties["color"].map { SiteHTTP.number($0) } ?? Double(0xFFFFFF)
-                    return ["time": SiteHTTP.number(row["playat"]) / 1000, "text": text, "mode": 1, "color": color]
+                    return ["time": SiteHTTP.number(row["playat"]) / 1000, "text": text, "mode": 1, "color": color, "style": properties]
                 }
                 return try DanmakuParser.parse(json(["comments": normalized]))
             }

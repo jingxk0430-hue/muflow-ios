@@ -13,11 +13,17 @@ public struct DanmakuComment: Codable, Identifiable, Equatable, Sendable {
     public var mode: DanmakuMode
     public var color: UInt32
     public var text: String
+    /// Optional source metadata, ignored by the ordinary MuFlow renderer.
+    public var styleJSON: String?
+    public var advancedJSON: String?
+    public var sourceFontSize: Double?
 
     public init(id: String, time: Double, mode: DanmakuMode = .scrolling,
-                color: UInt32 = 0xFFFFFF, text: String) {
+                color: UInt32 = 0xFFFFFF, text: String, styleJSON: String? = nil,
+                advancedJSON: String? = nil, sourceFontSize: Double? = nil) {
         self.id = id; self.time = time; self.mode = mode
         self.color = color & 0xFFFFFF; self.text = text
+        self.styleJSON = styleJSON; self.advancedJSON = advancedJSON; self.sourceFontSize = sourceFontSize
     }
 }
 
@@ -36,14 +42,14 @@ public enum DanmakuParser {
     public static let maximumBytes = 32 * 1024 * 1024
     public static let maximumComments = 100_000
 
-    public static func parse(_ data: Data) throws -> [DanmakuComment] {
+    public static func parse(_ data: Data, includeAdvanced: Bool = false) throws -> [DanmakuComment] {
         guard data.count <= maximumBytes else { throw DanmakuError.tooLarge }
         var bytes = data
         if bytes.starts(with: [0xEF, 0xBB, 0xBF]) { bytes.removeFirst(3) }
         let first = bytes.first { ![9, 10, 13, 32].contains($0) }
         let comments: [DanmakuComment]
         if first == 60 {
-            let delegate = XMLDanmakuDelegate()
+            let delegate = XMLDanmakuDelegate(includeAdvanced: includeAdvanced)
             let parser = XMLParser(data: bytes)
             parser.shouldResolveExternalEntities = false
             parser.delegate = delegate
@@ -53,7 +59,7 @@ public enum DanmakuParser {
             let root = try JSONSerialization.jsonObject(with: bytes)
             let entries: [[String: Any]]
             if let dict = root as? [String: Any] {
-                if let xml = dict["xml"] as? String { return try parse(Data(xml.utf8)) }
+                if let xml = dict["xml"] as? String { return try parse(Data(xml.utf8), includeAdvanced: includeAdvanced) }
                 guard let list = dict["comments"] as? [[String: Any]] else {
                     throw DanmakuError.invalidFormat
                 }
@@ -78,19 +84,23 @@ public enum DanmakuParser {
                 guard let time = (entry["time"] as? NSNumber)?.doubleValue else { return nil }
                 return make(id: "json-\(index)", time: time,
                             mode: (entry["mode"] as? NSNumber)?.intValue ?? 1,
-                            color: (entry["color"] as? NSNumber)?.uint32Value ?? 0xFFFFFF, text: text)
+                            color: (entry["color"] as? NSNumber)?.uint32Value ?? 0xFFFFFF, text: text,
+                            styleJSON: (entry["style"] as? [String: Any]).flatMap {
+                                guard let bytes = try? JSONSerialization.data(withJSONObject: $0), bytes.count <= 4096 else { return nil }
+                                return String(data: bytes, encoding: .utf8)
+                            })
             }
         }
         return comments.sorted { $0.time == $1.time ? $0.id < $1.id : $0.time < $1.time }
     }
 
     fileprivate static func make(id: String, time: Double, mode: Int, color: UInt32,
-                                  text: String) -> DanmakuComment? {
+                                  text: String, styleJSON: String? = nil) -> DanmakuComment? {
         guard time.isFinite, time >= 0, let mode = DanmakuMode(rawValue: mode) else { return nil }
         let clean = text.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }
         let value = String(String.UnicodeScalarView(clean)).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
-        return .init(id: id, time: time, mode: mode, color: color, text: String(value.prefix(500)))
+        return .init(id: id, time: time, mode: mode, color: color, text: String(value.prefix(500)), styleJSON: styleJSON)
     }
 
     public static func xml(_ comments: [DanmakuComment]) -> Data {
@@ -108,6 +118,8 @@ public enum DanmakuParser {
 
 private final class XMLDanmakuDelegate: NSObject, XMLParserDelegate {
     var comments: [DanmakuComment] = []
+    private let includeAdvanced: Bool
+    init(includeAdvanced: Bool) { self.includeAdvanced = includeAdvanced }
     private var parameters: [Substring]?
     private var text = ""
     func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,
@@ -119,7 +131,7 @@ private final class XMLDanmakuDelegate: NSObject, XMLParserDelegate {
         }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if parameters != nil, text.count < 2000 { text += string }
+        if parameters != nil, text.count < 16384 { text += String(string.prefix(16384 - text.count)) }
     }
     func parser(_ parser: XMLParser, foundCDATA data: Data) {
         if let value = String(data: data, encoding: .utf8) { self.parser(parser, foundCharacters: value) }
@@ -128,6 +140,14 @@ private final class XMLDanmakuDelegate: NSObject, XMLParserDelegate {
         guard name == "d", let p = parameters else { return }
         defer { parameters = nil; text = "" }
         guard p.count >= 4 else { return }
+        if includeAdvanced, Int(p[1]) == 7, let time = Double(p[0]), time.isFinite, time >= 0,
+           text.utf8.count <= 16384 {
+            // Keep mode-7 payload intact; the add-on validates it before display.
+            comments.append(.init(id: "xml-\(comments.count)", time: time,
+                                  color: UInt32(p[3]) ?? 0xFFFFFF, text: "",
+                                  advancedJSON: text, sourceFontSize: Double(p[2])))
+            return
+        }
         if let comment = DanmakuParser.make(id: "xml-\(comments.count)", time: Double(p[0]) ?? -.infinity,
                                            mode: Int(p[1]) ?? 0, color: UInt32(p[3]) ?? 0xFFFFFF, text: text) {
             comments.append(comment)

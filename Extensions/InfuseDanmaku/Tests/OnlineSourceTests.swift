@@ -34,6 +34,18 @@ private func expect(_ value: @autoclosure () throws -> Bool, _ message: String) 
         let iqiyi = try NativeDanmakuService.iqiyiXML(Data("<i><bulletInfo><contentId>1</contentId><showTime>1.5</showTime><content><![CDATA[爱奇艺弹幕]]></content><color>ffffff</color></bulletInfo></i>".utf8))
         try expect(iqiyi.count == 1 && iqiyi[0].text == "爱奇艺弹幕" && iqiyi[0].time == 1.5, "iQiyi CDATA/time")
 
+        let special = "[0.1,0.2,\"1-0\",6,\"高级文本\",30,45,0.9,0.8,2000,1000]"
+        let advancedXML = Data(("<i><d p=\"1,7,36,16777215\"><![CDATA[" + special + "]]></d><d p=\"2,9,25,16777215\">not executable</d></i>").utf8)
+        try expect(try DanmakuParser.parse(advancedXML).isEmpty, "ordinary renderer must not receive raw advanced payloads")
+        let advanced = try DanmakuParser.parse(advancedXML, includeAdvanced: true)
+        try expect(advanced.count == 1 && advanced[0].advancedJSON == special && advanced[0].sourceFontSize == 36, "mode 7 payload retention")
+        let advancedRows = IFDSourcePolicy.payload(.init(comments: advanced))["comments"] as? [[String: Any]]
+        try expect(advancedRows?.first?["mode"] as? Int == 7 && advancedRows?.first?["text"] as? String == special, "advanced bridge must not truncate JSON")
+        let iqiyiEffects = try NativeDanmakuService.iqiyiXML(Data("<i><bulletInfo><showTime>2</showTime><content>彩色心跳</content><specialEffectType>1</specialEffectType><contentType>100</contentType><colorInfo><![CDATA[{\"type\":1,\"details\":[\"ff0000\",\"0000ff\"]}]]></colorInfo></bulletInfo></i>".utf8))
+        let effectRows = IFDSourcePolicy.payload(.init(comments: iqiyiEffects))["comments"] as? [[String: Any]]
+        let style = effectRows?.first?["style"] as? [String: Any]
+        try expect(iqiyiEffects.first?.mode == .top && style?["animation"] as? Int == 1 && style?["colorInfo"] != nil, "source style survives full bridge")
+
         let root="http://127.0.0.1:18765/youku/"
         let youku=YoukuDanmakuService(endpoints: .init(metadata: URL(string: root+"meta")!,
             visitor: URL(string: root+"visitor")!, session: URL(string: root+"session")!, comments: URL(string: root+"comments")!))

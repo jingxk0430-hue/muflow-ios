@@ -16,8 +16,12 @@ enum IFDSourcePolicy {
     static func payload(_ result: DanmakuLoadResult) -> [String: Any] {
         let comments = result.comments.filter { $0.time.isFinite && $0.time >= 0 }
             .prefix(30_000).map { item -> [String: Any] in
-                ["time": item.time, "mode": item.mode.rawValue, "color": item.color,
-                 "text": String(item.text.prefix(300))]
+                var row: [String: Any] = ["time": item.time, "mode": item.advancedJSON == nil ? item.mode.rawValue : 7,
+                    "color": item.color, "text": item.advancedJSON ?? String(item.text.prefix(300)),
+                    "fontSize": item.sourceFontSize ?? 25]
+                if let style = item.styleJSON, let bytes = style.data(using: .utf8), bytes.count <= 4096,
+                   let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] { row["style"] = object }
+                return row
             }
         return ["comments": comments, "failedSegments": result.failedSegments,
                 "truncated": result.comments.count > 30_000]
@@ -35,7 +39,7 @@ final class IFDOnlineSourceBridge: NSObject {
                 let source = try IFDSourcePolicy.normalize(value)
                 // Direct source-site access. No external proxy, account cookies,
                 // webpage video extraction or changes to Infuse video playback.
-                let result = try await NativeDanmakuService().commentsWithStatus(source)
+                let result = try await NativeDanmakuService().commentsWithStatus(source, includeAdvanced: true)
                 try Task.checkCancellation()
                 guard !result.comments.isEmpty else { throw DanmakuError.empty }
                 let payload = IFDSourcePolicy.payload(result)

@@ -8,13 +8,13 @@ struct NativeDanmakuService: Sendable {
         try await commentsWithStatus(url).comments
     }
 
-    func commentsWithStatus(_ source: URL) async throws -> DanmakuLoadResult {
+    func commentsWithStatus(_ source: URL, includeAdvanced: Bool = false) async throws -> DanmakuLoadResult {
         let url = try await DanmakuSourceLink.resolve(source)
         let host = url.host?.lowercased() ?? ""
         if host == "v.qq.com" || host.hasSuffix(".v.qq.com") { return try await tencent(url) }
         if host == "iqiyi.com" || host.hasSuffix(".iqiyi.com") { return try await iqiyi(url) }
         if host == "youku.com" || host.hasSuffix(".youku.com") { return try await YoukuDanmakuService().comments(url) }
-        if host == "bilibili.com" || host.hasSuffix(".bilibili.com") { return .init(comments: try await bilibili(url)) }
+        if host == "bilibili.com" || host.hasSuffix(".bilibili.com") { return .init(comments: try await bilibili(url, includeAdvanced: includeAdvanced)) }
         if host == "mgtv.com" || host.hasSuffix(".mgtv.com") { return try await mgtv(url) }
         throw DanmakuError.empty
     }
@@ -53,7 +53,10 @@ struct NativeDanmakuService: Sendable {
             let style = row["content_style"] as? [String: Any]
             let color = Self.color(style?["color"])
             return .init(id: "qq:\(index):\(SiteHTTP.number(row["time_offset"]))", time: SiteHTTP.number(row["time_offset"]) / 1000,
-                         color: color, text: text)
+                         color: color, text: text, styleJSON: style.flatMap {
+                             guard let data = try? JSONSerialization.data(withJSONObject: $0), data.count <= 4096 else { return nil }
+                             return String(data: data, encoding: .utf8)
+                         })
         }
     }
 
@@ -131,7 +134,7 @@ struct NativeDanmakuService: Sendable {
         }
     }
 
-    private func bilibili(_ url: URL) async throws -> [DanmakuComment] {
+    private func bilibili(_ url: URL, includeAdvanced: Bool) async throws -> [DanmakuComment] {
         var cid: String?
         if let bvid = Self.match("(BV[A-Za-z0-9]+)", in: url.absoluteString) {
             let response = try await SiteHTTP.json("https://api.bilibili.com/x/player/pagelist", query: ["bvid": bvid], referer: "https://www.bilibili.com/")
@@ -149,7 +152,7 @@ struct NativeDanmakuService: Sendable {
             cid = rows.first { Self.scalar($0["id"]) == episode }.map { Self.scalar($0["cid"]) }
         }
         guard let cid, !cid.isEmpty, cid.allSatisfy(\.isNumber), let target = URL(string: "https://comment.bilibili.com/\(cid).xml") else { throw DanmakuError.empty }
-        return try DanmakuParser.parse(await SiteHTTP.data(target, referer: "https://www.bilibili.com/"))
+        return try DanmakuParser.parse(await SiteHTTP.data(target, referer: "https://www.bilibili.com/"), includeAdvanced: includeAdvanced)
     }
 
     private func mgtv(_ url: URL) async throws -> DanmakuLoadResult {
@@ -247,12 +250,20 @@ private final class IqiyiXMLReader: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, foundCharacters string: String) { value += string }
     func parser(_ parser: XMLParser, foundCDATA data: Data) { value += String(decoding: data, as: UTF8.self) }
     func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-        if ["content", "showTime", "color"].contains(name) { fields[name] = value }
+        if ["content", "showTime", "color", "specialEffectType", "colorInfo", "contentType"].contains(name) { fields[name] = value }
         if name == "bulletInfo", let text = fields["content"], !text.isEmpty,
            let time = Double(fields["showTime"] ?? ""), time.isFinite, time >= 0,
            comments.count < DanmakuParser.maximumComments {
+            var style: [String: Any] = [:]
+            if let effect = Int(fields["specialEffectType"] ?? ""), (1...3).contains(effect) { style["animation"] = effect }
+            if let colorInfo = fields["colorInfo"], colorInfo.utf8.count <= 4096,
+               let bytes = colorInfo.data(using: .utf8),
+               let object = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] { style["colorInfo"] = object }
+            let styleJSON = (try? JSONSerialization.data(withJSONObject: style)).flatMap { String(data: $0, encoding: .utf8) }
+            let type = Int(fields["contentType"] ?? "") ?? 0
+            let mode: DanmakuMode = [100,108].contains(type) ? .top : [200,208].contains(type) ? .bottom : .scrolling
             comments.append(.init(id: "iqiyi:\(comments.count)", time: time,
-                                  color: NativeDanmakuService.color(fields["color"]), text: text))
+                                  mode: mode, color: NativeDanmakuService.color(fields["color"]), text: text, styleJSON: styleJSON))
         }
         value = ""
     }
