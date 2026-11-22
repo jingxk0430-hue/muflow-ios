@@ -374,6 +374,10 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
             label.bounds=CGRectMake(0,0,c.width,row);
             label.alpha=self.textOpacity; [self.overlay addSubview:label];
             self.labels[key]=label;
+        }
+        // A seek or a long callback gap can cancel a queued bitmap while its
+        // view survives. Retry empty views, not only newly created ones.
+        if (!label.layer.contents && !label.fallback) {
             IFDTextImage *image=[self.textImages objectForKey:key];
             if (image) [label showImage:image];
             else {
