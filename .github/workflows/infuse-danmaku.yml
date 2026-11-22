@@ -27,7 +27,7 @@ jobs:
           "$RUNNER_TEMP/host-reader-test"
       - name: Verify compositor animation and playback transitions
         run: |
-          clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework QuartzCore Tests/layer_motion_test.mm -o "$RUNNER_TEMP/layer-motion-test"
+          clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -framework Foundation -framework QuartzCore -framework CoreGraphics Tests/layer_motion_test.mm -o "$RUNNER_TEMP/layer-motion-test"
           "$RUNNER_TEMP/layer-motion-test"
       - name: Build iOS dynamic library
         run: bash scripts/build-ios.sh
