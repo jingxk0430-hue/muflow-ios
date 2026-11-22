@@ -36,6 +36,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 @property(nonatomic, strong) IFDComment *current;
 @property(nonatomic, strong) NSMutableString *content;
 @property BOOL limited;
+@property NSUInteger unsupported;
 @end
 @implementation IFDXMLReader
 - (instancetype)init { if ((self=[super init])) _comments=[NSMutableArray array]; return self; }
@@ -51,7 +52,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     double seconds = 0; NSScanner *scanner=[NSScanner scannerWithString:p[0]];
     if (![scanner scanDouble:&seconds] || !scanner.isAtEnd || !std::isfinite(seconds) || seconds<0) return;
     NSInteger mode = [p[1] integerValue];
-    if (!(mode==1 || mode==2 || mode==3 || mode==4 || mode==5 || mode==7)) return;
+    if (!(mode==1 || mode==2 || mode==3 || mode==4 || mode==5 || mode==7)) {self.unsupported++;return;}
     unsigned int rgb = (unsigned int)[p[3] longLongValue] & 0xffffff;
     IFDComment *c=[IFDComment new]; c.time=seconds; c.mode=mode; c.textSize=[p[2] doubleValue];
     c.style=[IFDTextStyle parse:@{@"animation":attrs[@"ifd-effect"]?:@"0",
@@ -76,7 +77,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     if(self.current.mode==7) {
         self.current.advanced=[IFDAdvancedText parse:self.content fontSize:self.current.textSize];
-        self.current.text=self.current.advanced.text;
+        self.current.text=self.current.advanced.text;if(!self.current.advanced)self.unsupported++;
     }
     if (self.current.text.length) [self.comments addObject:self.current];
     self.current=nil; self.content=nil;
@@ -147,13 +148,14 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         }
     }
     if(kind==3 && image.glyphRects.count>0 && image.glyphRects.count<=64) {
+        CAKeyframeAnimation *rotation=ifd::styleAnimation(@"transform.rotation.z",3);
         for(NSValue *value in image.glyphRects) {
             CGRect rect=value.CGRectValue;if(rect.size.width<=0)continue;
             CALayer *glyph=[CALayer layer];glyph.frame=rect;glyph.contents=(__bridge id)image.image;
             glyph.contentsScale=self.layer.contentsScale;
             glyph.contentsRect=CGRectMake(rect.origin.x/self.bounds.size.width,0,rect.size.width/self.bounds.size.width,1);
             [self.ink addSublayer:glyph];[layers addObject:glyph];
-            [animations addObject:ifd::styleAnimation(@"transform.rotation.z",3)];
+            [animations addObject:rotation];
         }
     } else [self.ink addSublayer:text];
     if(kind==1){[layers addObject:self.ink];[animations addObject:ifd::styleAnimation(@"transform.scale",1)];}
@@ -455,7 +457,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     NSMutableSet<NSNumber *> *active=self.activeKeys; [active removeAllObjects];
     CGFloat row=self.fontSize+8;
     CGFloat base=self.overlay.safeAreaInsets.top+8;
-    NSUInteger styled=0;
+    NSUInteger styled=0,wiggles=0;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     for (auto &p:_visible) {
         IFDComment *c=self.comments[p.key]; NSNumber *key=c.renderKey;
@@ -468,13 +470,13 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
             label.layer.shouldRasterize=NO;
             label.layer.anchorPoint=CGPointZero;
             label.bounds=CGRectMake(0,0,c.width,row);
-            label.style=self.effectsEnabled?c.style:nil;label.styleActive=self.effectsEnabled&&c.style.animation&&styled<8;
+            label.style=self.effectsEnabled?c.style:nil;label.styleActive=NO;
             label.alpha=self.textOpacity; [self.overlay addSubview:label];
             self.labels[key]=label;
         }
         // A seek or a long callback gap can cancel a queued bitmap while its
         // view survives. Retry empty views, not only newly created ones.
-        BOOL styleActive=self.effectsEnabled&&c.style.animation&&styled<8;
+        BOOL styleActive=self.effectsEnabled&&c.style.animation&&styled<8&&(c.style.animation!=3||wiggles<2);
         if(label.styleActive!=styleActive){label.styleActive=styleActive;[label.ink removeFromSuperlayer];label.ink=nil;}
         if (!label.ink && !label.fallback) {
             IFDTextImage *image=[self.textImages objectForKey:key];
@@ -487,7 +489,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
                 else [self prepareImage:c];
             }
         }
-        if(label.styleActive)++styled;
+        if(label.styleActive){++styled;if(c.style.animation==3)++wiggles;}
         CGFloat y=base+p.lane*row;
         if (p.mode==ifd::Mode::top) y+=self.laneCount*row;
         else if (p.mode==ifd::Mode::bottom) y=self.overlay.bounds.size.height-self.overlay.safeAreaInsets.bottom-42-row*(p.lane+1);
@@ -622,7 +624,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
             s.comments=[reader.comments copy]; s.enabled=YES; [s rebuild];
             [s message:[NSString stringWithFormat:@"已导入 %lu 条弹幕%@。%@",
                 (unsigned long)s.comments.count,reader.limited?@"（已达到数量上限）":@"",
-                s.clockAvailable?@"":@"若播放时仍未显示，当前播放器接口可能尚未适配。"]];
+                reader.unsupported?[NSString stringWithFormat:@" 已跳过 %lu 条未支持或无效的高级/脚本弹幕。",(unsigned long)reader.unsupported]:(s.clockAvailable?@"":@"若播放时仍未显示，当前播放器接口可能尚未适配。")]];
         });
     });
 }

@@ -11,7 +11,7 @@ int main(){@autoreleasepool {
         assert(![IFDAdvancedText parse:bad fontSize:25]);
     IFDTextStyle *style=[IFDTextStyle parse:@{@"animation":@3,@"colorInfo":@"{\"type\":1,\"details\":\"[\\\"ff0000\\\",\\\"0000ff\\\"]\",\"orientation\":\"-90deg\",\"stroke\":\"ffffff\"}"}];
     assert(style.animation==3&&style.colors.count==2&&style.angle==-90&&style.stroke.unsignedIntValue==0xffffff);
-    assert([IFDTextStyle parse:@{@"animation":@99,@"colors":@[@"bad",@"ffffff"]}].colors.count==0);
+    assert(([IFDTextStyle parse:@{@"animation":@99,@"colors":@[@"bad",@"ffffff"]}].colors.count==0));
     CALayer *layer=[CALayer layer];ifd::EffectClock clock;
     CAAnimationGroup *group=ifd::advancedAnimation(m->spec,1,CGPointMake(0,0),.75);
     ifd::driveEffect(layer,group,2,1,100,false,clock);assert(clock.age==2&&clock.rate==1);

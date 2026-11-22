@@ -18,7 +18,7 @@ inline NSNumber *hexColor(id value) {
 inline double coordinate(id value,double axis,bool &valid) {
     double n=0;valid=number(value,n)&&std::abs(n)<=axis*8;
     // Fractional coordinates use the historical 672 x 438 stage.
-    return n>0&&n<1?n*axis:n;
+    return n>=0&&n<=1?n*axis:n;
 }
 }
 

@@ -42,7 +42,7 @@ inline CAAnimationGroup *advancedAnimation(const AdvancedSpec &s,double scale,CG
         CGPoint point=CGPointMake(origin.x+p.x*scale,origin.y+p.y*scale);
         [positions addObject:[NSValue value:&point withObjCType:@encode(CGPoint)]];
         [alphas addObject:@(s.alpha(t)*opacity)];}
-    position.values=positions;position.keyTimes=times;position.duration=s.duration;position.calculationMode=kCAAnimationLinear;
+    position.values=positions;position.keyTimes=times;position.duration=s.duration;position.calculationMode=s.moveDuration==0?kCAAnimationDiscrete:kCAAnimationLinear;
     alpha.values=alphas;alpha.keyTimes=times;alpha.duration=s.duration;alpha.calculationMode=kCAAnimationLinear;
     CAAnimationGroup *group=[CAAnimationGroup animation];group.animations=@[position,alpha];group.duration=s.duration;return group;
 }
