@@ -45,6 +45,8 @@ jobs:
         run: swift test --package-path ../../Packages/DanmakuCore
       - name: Test four-site URL and protocol bridge with local fixtures
         run: bash scripts/test-online.sh
+      - name: Verify actual UIKit effect layers in simulator
+        run: bash scripts/test-ui-effects.sh
       - uses: actions/upload-artifact@v4
         with:
           name: InfuseDanmaku-arm64-unsigned
@@ -52,5 +54,7 @@ jobs:
             Extensions/InfuseDanmaku/build/InfuseDanmaku.dylib
             Extensions/InfuseDanmaku/build/text-bitmap-preview.png
             Extensions/InfuseDanmaku/build/gradient-preview.png
+            Extensions/InfuseDanmaku/build/effect-ui-preview.png
+            Extensions/InfuseDanmaku/build/effect-ui-result.json
           retention-days: 7
           if-no-files-found: error
