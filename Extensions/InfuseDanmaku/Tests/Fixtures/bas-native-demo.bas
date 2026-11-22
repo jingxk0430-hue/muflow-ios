@@ -1,6 +1,6 @@
 // Authored interoperability fixture; 8 second scene, native text + vector path.
 def text title {
-  content = "幕流 BAS 原生场景"
+  content = "Infuse 弹幕 · BAS"
   x = 50%
   y = 35%
   anchorX = 0.5
