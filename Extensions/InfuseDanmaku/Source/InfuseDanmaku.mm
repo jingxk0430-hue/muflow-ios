@@ -450,7 +450,7 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
 }
 - (void)showSourceReport {
     NSUInteger bas=0,advanced=0;for(IFDComment *c in self.comments){if(c.bas)++bas;else if(c.advanced)++advanced;}
-    NSMutableString *report=[NSMutableString stringWithFormat:@"普通/高级弹幕 %lu 条，高级定位 %lu 条，BAS 场景 %lu 个。\n本地 BAS：文字、矢量路径、父子层级、串并行时间线、颜色与旋转缩放；按钮仅显示，暂不响应跳转。\n不支持模板、apply、脚本和动态描边宽度。\n",(unsigned long)self.comments.count,(unsigned long)advanced,(unsigned long)bas];
+    NSMutableString *report=[NSMutableString stringWithFormat:@"载入 %lu 条，其中定位弹幕 %lu 条、BAS 场景 %lu 个。\n本地 BAS：文字、矢量路径、父子层级、串并行时间线、颜色与旋转缩放；按钮仅显示，暂不响应跳转。\n不支持模板、apply、脚本和动态描边宽度。\n",(unsigned long)self.comments.count,(unsigned long)advanced,(unsigned long)bas];
     if(bas>_scenes.entries().size())[report appendFormat:@"%lu 个 BAS 场景因寿命或并发预算未排入时间线。\n",(unsigned long)(bas-_scenes.entries().size())];
     if(self.failedScenes.count)[report appendFormat:@"%lu 个 BAS 场景因超限或未支持属性跳过。\n",(unsigned long)self.failedScenes.count];
     NSArray *activities=self.sourceReport[@"activities"];
@@ -459,6 +459,8 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
     if(self.biliMask)[report appendFormat:@"人物遮挡：已下载蒙版，按 %.2f:1 画幅映射（齿轮菜单可切换）。%@\n",self.maskAspect,self.maskError?:@"仅受支持的 SVG 帧可显示；尚未核实宿主的实际视频画幅。"];
     else if(mask)[report appendFormat:@"人物遮挡来源状态：%@。\n",mask[@"status"]?:@"未提供"];
     NSDictionary *acquisition=self.sourceReport[@"acquisition"];
+    if([acquisition[@"unknownModes"] count])[report appendFormat:@"尚未支持的弹幕模式：%@\n",[acquisition[@"unknownModes"] description]];
+    if([acquisition[@"unknownActivities"] count])[report appendFormat:@"尚未支持的活动类型：%@\n",[acquisition[@"unknownActivities"] description]];
     if([acquisition[@"status"] isEqual:@"partial"])[report appendString:@"本次仅获取部分数据；匿名接口受限或某些资源缺失。\n"];
     for(NSDictionary *issue in acquisition[@"issues"])[report appendFormat:@"%@：%@\n",issue[@"stage"]?:@"来源",issue[@"status"]?:@"未知"];
     [self message:report];
@@ -605,7 +607,8 @@ static NSString *const IFDMenuIdentifier=@"com.muflow.infusedanmaku.controls";
         scene.root.opacity=self.textOpacity;[scene driveAt:time-c.time rate:renderRate wall:_lastEffectWall force:jumped];
     }
     for(NSNumber *key in self.sceneLayers.allKeys)if(![sceneKeys containsObject:key]){[self.sceneLayers[key].root removeFromSuperlayer];[self.sceneLayers removeObjectForKey:key];}
-    [self updateMaskAt:time jumped:jumped];
+    // A user offset shifts comments; a person mask stays on the video clock.
+    [self updateMaskAt:time+self.delay jumped:jumped];
     _effects.at(time,_activeEffects);
     for(size_t index:_activeEffects) {
         IFDComment *c=self.comments[index];NSNumber *key=c.renderKey;[active addObject:key];

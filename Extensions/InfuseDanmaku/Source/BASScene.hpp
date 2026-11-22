@@ -208,6 +208,9 @@ inline CAKeyframeAnimation *animation(NSString *key,NSArray *values,NSArray *tim
                 if(button)add(@"backgroundColor",(__bridge id)color(p,"fillColor",num(p,"fillAlpha",1)).CGColor);}
         }
     }
+    NSUInteger layerCount=0;
+    for(NSDictionary *node in nodes)layerCount+=2+([node[@"type"] isEqual:@"path"]?1:[node[@"images"] count]*5);
+    if(layerCount>256){out.error=@"BAS 场景图层超过 256 层";return out;}
     out.bytes+=steps.size()*scene.nodes.size()*600; // NSArray/NSNumber/CGColor animation storage estimate
     if(out.bytes>24*1024*1024){out.error=@"BAS 场景总内存超过 24 MB";return out;}
     out.nodes=nodes;return out;
