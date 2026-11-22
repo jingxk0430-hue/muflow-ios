@@ -35,23 +35,29 @@ inline CTFontRef font(const bas::Properties& p,double size) {
     return base;
 }
 inline CGSize textSize(NSString *text,CTFontRef face) {
-    double width=0;NSArray *lines=[text componentsSeparatedByString:@"\n"];
+    double width=0,height=0;NSArray *lines=[text componentsSeparatedByString:@"\n"];
     if(lines.count>8||text.length>512)return CGSizeZero;
     for(NSString *line in lines){NSAttributedString *a=[[NSAttributedString alloc] initWithString:line attributes:@{(__bridge id)kCTFontAttributeName:(__bridge id)face}];
-        CTLineRef l=CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)a);width=MAX(width,CTLineGetTypographicBounds(l,nullptr,nullptr,nullptr));CFRelease(l);}
-    return CGSizeMake(ceil(width)+8,ceil((CTFontGetAscent(face)+CTFontGetDescent(face)+CTFontGetLeading(face))*lines.count)+8);
+        CTLineRef l=CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)a);CGFloat ascent=0,descent=0,leading=0;
+        width=MAX(width,CTLineGetTypographicBounds(l,&ascent,&descent,&leading));
+        height+=MAX(ascent+descent+leading,CTFontGetSize(face));CFRelease(l);}
+    return CGSizeMake(ceil(width)+8,ceil(height)+8);
 }
 inline CGImageRef textImage(NSString *text,CTFontRef face,CGSize points,double scale,double stroke) CF_RETURNS_RETAINED {
     size_t w=0,h=0;if(!ifd::bitmapSize(points,scale,w,h))return nullptr;
     CGColorSpaceRef space=CGColorSpaceCreateDeviceRGB();
     CGContextRef c=CGBitmapContextCreate(nullptr,w,h,8,w*4,space,kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big);CGColorSpaceRelease(space);if(!c)return nullptr;
     CGContextScaleCTM(c,scale,scale);CGContextSetTextMatrix(c,CGAffineTransformIdentity);CGContextSetLineJoin(c,kCGLineJoinRound);
-    double lineHeight=CTFontGetAscent(face)+CTFontGetDescent(face)+CTFontGetLeading(face),y=points.height-4-CTFontGetAscent(face);
+    double y=points.height-4;
     for(NSString *line in [text componentsSeparatedByString:@"\n"]){
         NSMutableDictionary *attributes=[@{(__bridge id)kCTFontAttributeName:(__bridge id)face,(__bridge id)kCTForegroundColorAttributeName:(__bridge id)UIColor.whiteColor.CGColor} mutableCopy];
         if(stroke>0){attributes[(__bridge id)kCTStrokeWidthAttributeName]=@(stroke);attributes[(__bridge id)kCTStrokeColorAttributeName]=(__bridge id)UIColor.whiteColor.CGColor;}
         NSAttributedString *a=[[NSAttributedString alloc] initWithString:line attributes:attributes];CTLineRef l=CTLineCreateWithAttributedString((__bridge CFAttributedStringRef)a);
-        CGContextSetTextPosition(c,4,y);CTLineDraw(l,c);CFRelease(l);y-=lineHeight;
+        CGFloat ascent=0,descent=0,leading=0;CTLineGetTypographicBounds(l,&ascent,&descent,&leading);
+        // The line's fallback faces (CJK/emoji) can be taller than Helvetica.
+        // Use shaped metrics for both allocation and baseline to avoid clipping.
+        double lineHeight=MAX(ascent+descent+leading,CTFontGetSize(face));
+        CGContextSetTextPosition(c,4,y-ascent);CTLineDraw(l,c);CFRelease(l);y-=lineHeight;
     }
     CGImageRef image=CGBitmapContextCreateImage(c);CGContextRelease(c);return image;
 }
